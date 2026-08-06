@@ -3,6 +3,7 @@
 *.docx
 *.xml
 *.txt
+*.gift
 
 # Ambiente / chaves de API
 .env

@@ -197,7 +197,19 @@ Regras para esses marcadores:
   de onde ele estava no texto original.
 
 Sua tarefa: identificar cada questão do texto e devolver uma lista
-estruturada. Para cada questão, extraia:
+estruturada. IMPORTANTE sobre a identificação: este texto vem de provas
+feitas por professores/conteudistas diferentes, e cada um formata do seu
+jeito — não existe um padrão único. Você pode encontrar, por exemplo:
+numeração "1.", "01)", "Questão 1", "QUESTÃO 01", títulos em negrito,
+enunciados sem nenhuma numeração (só separados por parágrafo em branco),
+alternativas com "a)", "A)", "I.", "-", ou letras entre parênteses, gabarito
+disperso ao final do documento em vez de logo após a questão, blocos com ou
+sem justificativa. Não assuma um formato fixo: use o SENTIDO do texto (uma
+pergunta seguida de um conjunto de opções de resposta = uma questão) para
+decidir onde uma questão termina e a próxima começa, mesmo que a
+numeração/formatação mude no meio do mesmo documento.
+
+Para cada questão, extraia:
 
 - "titulo": título curto (use "Questão N" se não houver título explícito)
 - "tipo": "Objetiva" (múltipla escolha) ou "Discursiva" (sem alternativas)
@@ -233,11 +245,20 @@ SCHEMA_RESPOSTA = {
 # =========================
 # 3) CHAMADA À API (Gemini)
 # =========================
-def extrair_questoes_via_ia(texto_marcado: str, modelo: str = "gemini-3.5-flash-lite") -> list[dict]:
+def extrair_questoes_via_ia(
+    texto_marcado: str,
+    disciplina: str,
+    modelo: str = "gemini-3.5-flash-lite",
+) -> list[dict]:
     """
     Envia o texto marcado para o Gemini e devolve uma lista de dicts no
     MESMO formato que seus parse_questao_*() já produzem hoje, para poder
     plugar direto em montar_gift() / gerar_moodle_xml() depois.
+
+    'disciplina' vem de fora (você informa), não é adivinhada pela IA: o
+    nome da disciplina raramente está escrito de forma confiável dentro do
+    texto da prova, então é mais seguro receber como parâmetro do que
+    arriscar a IA inventar ou errar.
 
     Nota: a partir do Gemini 3.x, os parâmetros temperature/top_p/top_k
     foram descontinuados (a API os ignora) — por isso não aparecem aqui.
@@ -270,6 +291,10 @@ def extrair_questoes_via_ia(texto_marcado: str, modelo: str = "gemini-3.5-flash-
     for q in questoes:
         q["modo"] = "extraido_via_ia"
         q["qtd_alternativas"] = (1 + len(q.get("incorretas", []))) if q["tipo"] == "Objetiva" else 0
+        # Tags: tipo já veio da IA (Objetiva/Discursiva); disciplina vem do
+        # parâmetro. Calculadas aqui, não pela IA, pelo mesmo motivo de
+        # sempre: são fatos que já temos com certeza, não algo a "adivinhar".
+        q["tags"] = [disciplina, q["tipo"]]
 
     return questoes
 
@@ -303,11 +328,12 @@ def definir_formato_arquivo(questoes: list[dict]) -> str:
 # EXECUÇÃO DIRETA (TESTE MANUAL)
 # =========================
 def main():
-    if len(sys.argv) < 2:
-        print("Uso: python extracao_ia_gemini.py caminho/para/prova.docx")
+    if len(sys.argv) < 3:
+        print("Uso: python extracao_ia_gemini.py caminho/para/prova.docx \"Nome da Disciplina\"")
         sys.exit(1)
 
     caminho = Path(sys.argv[1])
+    disciplina = sys.argv[2]
     if not caminho.exists():
         print(f"Arquivo não encontrado: {caminho}")
         sys.exit(1)
@@ -317,7 +343,7 @@ def main():
     print(f"[INFO] {len(IMAGENS_EXTRAIDAS)} imagem(ns) encontrada(s) no documento.")
 
     print("[INFO] Enviando para a IA (Gemini)...")
-    questoes = extrair_questoes_via_ia(texto_marcado)
+    questoes = extrair_questoes_via_ia(texto_marcado, disciplina=disciplina)
 
     print(f"\n[OK] {len(questoes)} questão(ões) extraída(s):\n")
     print(json.dumps(questoes, ensure_ascii=False, indent=2))

@@ -3,7 +3,7 @@ Orquestrador do pipeline: .docx -> extração via IA -> GIFT/XML.
 
 Uso:
     export GEMINI_API_KEY="sua_chave_aqui"
-    python main.py caminho/para/prova.docx [pasta_de_saida]
+    python main.py caminho/para/prova.docx "Nome da Disciplina" [pasta_de_saida]
 """
 
 import sys
@@ -19,12 +19,13 @@ from formatador import gerar_arquivo
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Uso: python main.py caminho/para/prova.docx [pasta_de_saida]")
+    if len(sys.argv) < 3:
+        print('Uso: python main.py caminho/para/prova.docx "Nome da Disciplina" [pasta_de_saida]')
         sys.exit(1)
 
     caminho = Path(sys.argv[1])
-    pasta_saida = sys.argv[2] if len(sys.argv) > 2 else "."
+    disciplina = sys.argv[2]
+    pasta_saida = sys.argv[3] if len(sys.argv) > 3 else "."
 
     if not caminho.exists():
         print(f"Arquivo não encontrado: {caminho}")
@@ -35,12 +36,12 @@ def main():
     print(f"      {len(IMAGENS_EXTRAIDAS)} imagem(ns) encontrada(s).")
 
     print("[2/3] Extraindo questões via IA (Gemini)...")
-    questoes = extrair_questoes_via_ia(texto_marcado)
+    questoes = extrair_questoes_via_ia(texto_marcado, disciplina=disciplina)
     formato = definir_formato_arquivo(questoes)
     print(f"      {len(questoes)} questão(ões) extraída(s). Formato do arquivo: {formato.upper()}.")
 
     print("[3/3] Gerando arquivo...")
-    gerar_arquivo(questoes, IMAGENS_EXTRAIDAS, formato=formato, pasta_saida=pasta_saida)
+    gerar_arquivo(questoes, IMAGENS_EXTRAIDAS, formato=formato, pasta_saida=pasta_saida, disciplina=disciplina)
 
 
 if __name__ == "__main__":

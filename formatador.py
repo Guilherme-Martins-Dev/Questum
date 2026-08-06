@@ -40,8 +40,9 @@ def escapar_gift(texto: str) -> str:
 
 
 def montar_bloco_gift(questao: dict) -> str:
-    """Monta um bloco GIFT para uma questão sem imagens."""
-    linhas = [f"::{escapar_gift(questao['titulo'])}::"]
+    """Monta um bloco GIFT para uma questão sem imagens, com as tags como comentário."""
+    linhas = [f"// [tag: {tag}]" for tag in questao.get("tags", [])]
+    linhas.append(f"::{escapar_gift(questao['titulo'])}::")
     linhas.append(escapar_gift(questao["enunciado"]))
 
     if questao.get("tipo") == "Discursiva":
@@ -135,6 +136,11 @@ def montar_elemento_xml(questao: dict, imagens_extraidas: dict) -> ET.Element:
     ET.SubElement(q, "penalty").text = "0.3333333"
     ET.SubElement(q, "hidden").text = "0"
 
+    tags_el = ET.SubElement(q, "tags")
+    for tag in questao.get("tags", []):
+        tag_el = ET.SubElement(tags_el, "tag")
+        ET.SubElement(tag_el, "text").text = tag
+
     if questao.get("tipo") == "Discursiva":
         ET.SubElement(q, "responseformat").text = "editor"
         ET.SubElement(q, "responserequired").text = "1"
@@ -190,7 +196,7 @@ def gerar_arquivo(
 
     if formato == "gift":
         blocos = [montar_bloco_gift(q) for q in questoes]
-        caminho = pasta / "banco_questoes.gift.txt"
+        caminho = pasta / "banco_questoes.gift"
         caminho.write_text("\n\n".join(blocos), encoding="utf-8")
         print(f"[OK] {len(questoes)} questão(ões), formato GIFT -> {caminho}")
         return
