@@ -1,0 +1,22 @@
+# Arquivos de teste da instituição (provas/questões) — não versionar
+*.doc
+*.docx
+*.xml
+*.txt
+
+# Ambiente / chaves de API
+.env
+*.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Sistema / editor
+.DS_Store
+.vscode/
+.idea/
