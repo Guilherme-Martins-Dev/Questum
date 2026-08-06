@@ -270,8 +270,33 @@ def extrair_questoes_via_ia(texto_marcado: str, modelo: str = "gemini-3.5-flash-
     for q in questoes:
         q["modo"] = "extraido_via_ia"
         q["qtd_alternativas"] = (1 + len(q.get("incorretas", []))) if q["tipo"] == "Objetiva" else 0
+        q["formato"] = definir_formato_questao(q)
 
     return questoes
+
+
+def definir_formato_questao(questao: dict) -> str:
+    """
+    Decide se a questão deve virar bloco GIFT ou <question> XML.
+
+    Regra: se sobrou algum marcador __MOODLE_IMAGE_...__ em qualquer campo
+    de texto da questão, ela tem imagem -> usa XML (que embute a imagem em
+    base64 via <file>). Sem imagem -> usa GIFT (texto puro, mais simples).
+
+    Importante: isso é calculado aqui no código, não pela IA. A IA já nos
+    deu os marcadores exatamente como estavam no documento (ela só teve
+    que preservá-los, não interpretá-los) — então checar "still tem
+    marcador?" é uma verificação de string, determinística e sem chance de
+    a IA errar o julgamento. Mais confiável que pedir pra ela decidir.
+    """
+    campos = [
+        questao.get("enunciado", ""),
+        questao.get("correta", ""),
+        " ".join(questao.get("incorretas", [])),
+        questao.get("justificativa", ""),
+    ]
+    texto_completo = " ".join(campos)
+    return "xml" if "__MOODLE_IMAGE_" in texto_completo else "gift"
 
 
 # =========================
