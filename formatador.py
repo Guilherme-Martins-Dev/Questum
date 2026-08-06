@@ -169,37 +169,41 @@ def montar_elemento_xml(questao: dict, imagens_extraidas: dict) -> ET.Element:
 # =========================
 # ORQUESTRAÇÃO: separa por formato e escreve os arquivos
 # =========================
-def gerar_arquivos(
+def gerar_arquivo(
     questoes: list[dict],
     imagens_extraidas: dict,
+    formato: str,
     pasta_saida: str = ".",
     disciplina: str = "Banco de Questões",
 ) -> None:
+    """
+    Escreve UM arquivo só, com todas as questões, no formato decidido para
+    o lote inteiro ("gift" ou "xml" — ver definir_formato_arquivo em
+    extracao_ia_gemini.py).
+    """
     pasta = Path(pasta_saida)
     pasta.mkdir(parents=True, exist_ok=True)
 
-    questoes_gift = [q for q in questoes if q.get("formato") == "gift"]
-    questoes_xml = [q for q in questoes if q.get("formato") == "xml"]
-
-    if questoes_gift:
-        blocos = [montar_bloco_gift(q) for q in questoes_gift]
-        caminho_gift = pasta / "banco_questoes_gift.txt"
-        caminho_gift.write_text("\n\n".join(blocos), encoding="utf-8")
-        print(f"[OK] {len(questoes_gift)} questão(ões) sem imagem -> {caminho_gift}")
-
-    if questoes_xml:
-        quiz = ET.Element("quiz")
-        categoria = ET.SubElement(quiz, "question", {"type": "category"})
-        cat = ET.SubElement(categoria, "category")
-        ET.SubElement(cat, "text").text = f"$course$/top/{disciplina}"
-
-        for questao in questoes_xml:
-            quiz.append(montar_elemento_xml(questao, imagens_extraidas))
-
-        xml_bonito = minidom.parseString(ET.tostring(quiz, encoding="utf-8")).toprettyxml(indent="  ")
-        caminho_xml = pasta / "banco_questoes_moodle.xml"
-        caminho_xml.write_text(xml_bonito, encoding="utf-8")
-        print(f"[OK] {len(questoes_xml)} questão(ões) com imagem -> {caminho_xml}")
-
-    if not questoes_gift and not questoes_xml:
+    if not questoes:
         print("[AVISO] Nenhuma questão para gerar.")
+        return
+
+    if formato == "gift":
+        blocos = [montar_bloco_gift(q) for q in questoes]
+        caminho = pasta / "banco_questoes.gift.txt"
+        caminho.write_text("\n\n".join(blocos), encoding="utf-8")
+        print(f"[OK] {len(questoes)} questão(ões), formato GIFT -> {caminho}")
+        return
+
+    quiz = ET.Element("quiz")
+    categoria = ET.SubElement(quiz, "question", {"type": "category"})
+    cat = ET.SubElement(categoria, "category")
+    ET.SubElement(cat, "text").text = f"$course$/top/{disciplina}"
+
+    for questao in questoes:
+        quiz.append(montar_elemento_xml(questao, imagens_extraidas))
+
+    xml_bonito = minidom.parseString(ET.tostring(quiz, encoding="utf-8")).toprettyxml(indent="  ")
+    caminho = pasta / "banco_questoes.xml"
+    caminho.write_text(xml_bonito, encoding="utf-8")
+    print(f"[OK] {len(questoes)} questão(ões), formato XML -> {caminho}")

@@ -11,10 +11,11 @@ from pathlib import Path
 
 from extracao_ia_gemini import (
     IMAGENS_EXTRAIDAS,
+    definir_formato_arquivo,
     extrair_questoes_via_ia,
     extrair_texto_marcado,
 )
-from formatador import gerar_arquivos
+from formatador import gerar_arquivo
 
 
 def main():
@@ -35,12 +36,11 @@ def main():
 
     print("[2/3] Extraindo questões via IA (Gemini)...")
     questoes = extrair_questoes_via_ia(texto_marcado)
-    com_imagem = sum(1 for q in questoes if q["formato"] == "xml")
-    sem_imagem = len(questoes) - com_imagem
-    print(f"      {len(questoes)} questão(ões): {sem_imagem} -> GIFT, {com_imagem} -> XML.")
+    formato = definir_formato_arquivo(questoes)
+    print(f"      {len(questoes)} questão(ões) extraída(s). Formato do arquivo: {formato.upper()}.")
 
-    print("[3/3] Gerando arquivos...")
-    gerar_arquivos(questoes, IMAGENS_EXTRAIDAS, pasta_saida=pasta_saida)
+    print("[3/3] Gerando arquivo...")
+    gerar_arquivo(questoes, IMAGENS_EXTRAIDAS, formato=formato, pasta_saida=pasta_saida)
 
 
 if __name__ == "__main__":
