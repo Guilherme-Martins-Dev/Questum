@@ -288,13 +288,45 @@ referência, não como lista fechada):
   "II – ...", letras maiúsculas soltas "A – ...", ou marcadores de V/F
   "( ) ...". Sequências como "V, F, V" ou "V, V, F" também indicam
   julgamento de afirmativas, não uma questão nova.
+
+Padrão importante — AFIRMATIVAS SEM NUMERAÇÃO VISÍVEL + alternativas de
+combinação: às vezes as afirmativas a serem julgadas NÃO têm nenhum "I."
+ou "II." escrito no texto — são só frases/parágrafos soltos, um atrás do
+outro, e só DEPOIS aparecem as alternativas de resposta, que são
+combinações curtas desses itens (pela posição: 1º parágrafo = I, 2º = II,
+3º = III...). Exemplo real:
+    (enunciado) Com relação a história... marque o item VERDADEIRO:
+    A ideia central de responsabilidade social... [seria a afirmativa I]
+    A responsabilidade social das empresas teve início... [afirmativa II]
+    Em 1970 a responsabilidade social... [afirmativa III]
+    Em 1979 a responsabilidade social... [afirmativa IV]
+    I e II
+    II e III
+    I, II e III
+    I, II, III e IV
+    COMENTÁRIO: ...
+Nesse padrão, as 4 frases longas (sem numeração visível) são AFIRMATIVAS,
+e ficam dentro do campo "enunciado" (mantenha-as na ordem, pode numerá-las
+I/II/III/IV você mesmo para ficar claro) — elas NUNCA vão para "correta"
+nem para "incorretas". Só as 4 frases curtas finais ("I e II", "II e III"
+etc.) são as alternativas de resposta de verdade. Esse é o erro mais comum
+nesse tipo de documento: colocar as afirmativas longas dentro da lista de
+alternativas por engano, junto com as combinações — não faça isso.
+
 - Gabarito/resposta correta, geralmente ao final da questão ou do
   documento: "✅ Resposta correta: B", "Resposta Correta - C",
   "Gabarito: D", "[Gabarito]: A". A letra indicada corresponde à
   alternativa correspondente na ordem em que as alternativas foram
   listadas (A = primeira, B = segunda, etc.).
 - Comentário/justificativa da resposta: "💡 Comentário: ...",
-  "Feedback: ...", "Justificativa: ...".
+  "Feedback: ...", "Justificativa: ...". Quando o comentário explicar
+  quais afirmativas são verdadeiras/falsas, use essa conclusão para
+  escolher, entre as alternativas de combinação já listadas, qual bate
+  exatamente com o conjunto de afirmativas verdadeiras. Se a conclusão do
+  comentário não corresponder a NENHUMA alternativa listada, é sinal de
+  inconsistência no documento original — não force nem invente uma
+  correspondência; nesse caso, prefira deixar "correta" vazio e devolver
+  todas as opções em "incorretas" a arriscar uma resposta errada.
 - [VERMELHO] pode aparecer em tons diferentes de vermelho (não é sempre o
   mesmo vermelho "puro") — trate qualquer trecho marcado com [VERMELHO]
   como candidato a resposta correta, independentemente do tom exato.
