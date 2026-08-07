@@ -154,7 +154,7 @@ def montar_elemento_xml(questao: dict, imagens_extraidas: dict) -> ET.Element:
     ET.SubElement(q, "answernumbering").text = "abc"
 
     fracao_correta = "100"
-    fracao_incorreta = str(round(-100 / max(len(questao.get("incorretas", [])), 1), 5))
+    fracao_incorreta = "0"
 
     correta_html, imagens_correta = _texto_html_com_imagens(
         questao.get("correta", ""), imagens_extraidas
