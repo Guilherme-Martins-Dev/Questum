@@ -46,11 +46,24 @@ IMAGENS_EXTRAIDAS: dict[str, dict] = {}
 #  reaproveite as suas se preferir importar do questões.py)
 # =========================
 def run_vermelho(run) -> bool:
+    """
+    Detecta texto marcado em tom de vermelho — não só o vermelho puro
+    (FF0000). Em documentos reais, professores usam tons variados
+    (990000, CC0000, etc.) ao marcar manualmente a resposta correta.
+    Regra: canal R dominante e G/B baixos o suficiente pra não confundir
+    com laranja, marrom ou rosa.
+    """
     color = getattr(getattr(run.font, "color", None), "rgb", None)
     if color is None:
         return False
     cor = str(color).upper()
-    return cor == "FF0000" or "FF0000" in cor
+    if len(cor) != 6:
+        return False
+    try:
+        r, g, b = int(cor[0:2], 16), int(cor[2:4], 16), int(cor[4:6], 16)
+    except ValueError:
+        return False
+    return r >= 100 and g <= 80 and b <= 80 and r > g + 40 and r > b + 40
 
 
 def run_amarelo(run) -> bool:
@@ -60,6 +73,37 @@ def run_amarelo(run) -> bool:
 
 def run_negrito(run) -> bool:
     return bool(run.bold)
+
+
+def obter_info_lista_word(paragrafo) -> tuple[int | None, int | None]:
+    """
+    Alguns .docx usam numeração AUTOMÁTICA do Word para questões/alternativas
+    (o Word desenha "1." ou "a)" na tela, mas esse número não existe no
+    paragraph.text — é metadado da lista, invisível pra extração normal de
+    texto). Sem captar isso, esses documentos chegariam à IA sem nenhuma
+    numeração visível, e a segmentação ficaria praticamente impossível.
+
+    Convenção observada: ilvl == 0 costuma ser o item principal (a questão);
+    ilvl == 1 costuma ser o subitem (a alternativa). Não é garantido, mas é
+    um sinal estrutural forte, independente de regex sobre o texto.
+    """
+    pPr = paragrafo._p.pPr
+    if pPr is None or pPr.numPr is None:
+        return None, None
+
+    numPr = pPr.numPr
+    num_id, ilvl = None, None
+    if numPr.numId is not None:
+        try:
+            num_id = int(numPr.numId.val)
+        except (TypeError, ValueError):
+            pass
+    if numPr.ilvl is not None:
+        try:
+            ilvl = int(numPr.ilvl.val)
+        except (TypeError, ValueError):
+            pass
+    return num_id, ilvl
 
 
 def _extensao_por_mime(content_type: str, nome_original: str = "") -> str:
@@ -162,7 +206,17 @@ def extrair_texto_marcado(docx_path: str) -> str:
 
                 partes.append(f"{abre}{trecho}{fecha}")
 
-            linhas.append("".join(partes).strip() or texto)
+            linha_texto = "".join(partes).strip() or texto
+
+            # Numeração automática do Word (sem dígito visível no texto):
+            # marca o nível pra a IA usar como pista estrutural extra.
+            _, ilvl = obter_info_lista_word(paragrafo)
+            if ilvl == 0:
+                linha_texto = f"[ITEM_LISTA_NIVEL0] {linha_texto}"
+            elif ilvl == 1:
+                linha_texto = f"[ITEM_LISTA_NIVEL1] {linha_texto}"
+
+            linhas.append(linha_texto)
 
         # Marcador entra em linha própria, logo após o texto do parágrafo —
         # é assim que o script original também posiciona a imagem.
@@ -208,6 +262,62 @@ sem justificativa. Não assuma um formato fixo: use o SENTIDO do texto (uma
 pergunta seguida de um conjunto de opções de resposta = uma questão) para
 decidir onde uma questão termina e a próxima começa, mesmo que a
 numeração/formatação mude no meio do mesmo documento.
+
+Marcadores de lista automática do Word: quando um parágrafo começa com
+[ITEM_LISTA_NIVEL0], significa que o Word tinha uma numeração automática
+ali (que não aparece como dígito no texto) e o nível sugere item principal
+— normalmente uma questão nova. [ITEM_LISTA_NIVEL1] é o nível seguinte —
+normalmente uma alternativa dessa questão. Use isso como pista estrutural
+adicional, junto com o sentido do texto (não é garantia absoluta: um título
+de seção também pode estar no nível 0). Remova esses marcadores do
+resultado final, eles não fazem parte do conteúdo da questão.
+
+Catálogo de padrões já observados neste tipo de documento (use como
+referência, não como lista fechada):
+- Cabeçalhos de SEÇÃO, não são questões: "Unidade 3", "Unidade III",
+  "Bloco 2", "Assunto: ...", "Fórum 1", "Questionário 2",
+  "QUESTIONÁRIO DAS UNIDADES". Ignore-os como conteúdo de questão, mas eles
+  ajudam a saber que uma nova questão está prestes a começar.
+- Frases-gatilho que indicam um enunciado real de questão objetiva (ajudam
+  a diferenciar de um subtítulo temático curto, tipo "1. Conceito de
+  psicomotricidade", que NÃO é questão): "assinale a alternativa...",
+  "marque a opção...", "é correto afirmar...", "avalie as afirmativas...",
+  "considerando o texto acima...", "qual das alternativas...".
+- Subitens dentro da MESMA questão (não são alternativas nem novas
+  questões) — comum em questões de "julgue as afirmativas": "I – ...",
+  "II – ...", letras maiúsculas soltas "A – ...", ou marcadores de V/F
+  "( ) ...". Sequências como "V, F, V" ou "V, V, F" também indicam
+  julgamento de afirmativas, não uma questão nova.
+- Gabarito/resposta correta, geralmente ao final da questão ou do
+  documento: "✅ Resposta correta: B", "Resposta Correta - C",
+  "Gabarito: D", "[Gabarito]: A". A letra indicada corresponde à
+  alternativa correspondente na ordem em que as alternativas foram
+  listadas (A = primeira, B = segunda, etc.).
+- Comentário/justificativa da resposta: "💡 Comentário: ...",
+  "Feedback: ...", "Justificativa: ...".
+- [VERMELHO] pode aparecer em tons diferentes de vermelho (não é sempre o
+  mesmo vermelho "puro") — trate qualquer trecho marcado com [VERMELHO]
+  como candidato a resposta correta, independentemente do tom exato.
+
+Padrão importante — GABARITO COMENTADO EM BLOCO, separado das questões:
+às vezes as questões vêm todas primeiro, sem nenhuma marcação de resposta
+correta nelas, e só depois aparece uma seção própria (cabeçalho tipo
+"GABARITO", "GABARITO COMENTADO", "RESPOSTAS COMENTADAS") com uma lista
+curta assim:
+    1. C – O material caracteriza a prática escolar predominante da
+    Antiguidade ao século XIX como uma aprendizagem passivo-receptiva...
+    2. B – O material apresenta a publicação da Didactica Magna...
+Nesse padrão, cada linha começa com o NÚMERO da questão (correspondente à
+ordem/numeração das questões no início do documento — "1." corresponde à
+primeira questão, "Questão 1"), seguido de um traço, seguido do texto
+completo da justificativa. Quando encontrar esse padrão, você deve: (1)
+usar o número para localizar a questão correspondente (elas aparecem na
+mesma ordem em que foram numeradas no início do documento); (2) usar a
+letra para escolher, entre as alternativas já listadas naquela questão,
+qual é a "correta"; (3) copiar o texto após o traço para o campo
+"justificativa" daquela questão. Isso vale mesmo que a lista de gabarito
+esteja dezenas de parágrafos depois da questão no documento — não ignore
+essa seção só porque está longe.
 
 Para cada questão, extraia:
 
