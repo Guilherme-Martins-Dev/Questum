@@ -49,4 +49,4 @@ Projeto desenvolvido para uso institucional, com foco em automatizar a criação
 
 ## 📄 Licença
 
-_A definir._
+Todos os direitos reservados
