@@ -19,6 +19,8 @@ extração/estruturação de texto de alto volume).
 
 from __future__ import annotations
 
+import re
+
 import base64
 import hashlib
 import json
@@ -263,6 +265,22 @@ pergunta seguida de um conjunto de opções de resposta = uma questão) para
 decidir onde uma questão termina e a próxima começa, mesmo que a
 numeração/formatação mude no meio do mesmo documento.
 
+Cuidado com FALSO POSITIVO comum: uma linha curta tipo "1. Conceito de
+psicomotricidade" ou "2. Introdução à ética" é um SUBTÍTULO TEMÁTICO (título
+de seção/tema), não uma questão — mesmo tendo numeração parecida com uma
+questão. Sinais de que é subtítulo, não questão: é curto (até ~12
+palavras), não termina em ":" nem "?", e não contém palavra de comando
+típica de enunciado ("assinale", "marque", "identifique", "indique",
+"avalie", "considere", "qual", "quais", "corresponde a", "refere-se a").
+Trate esses subtítulos como contexto/seção, não como questão nem como
+conteúdo de nenhuma questão.
+
+Cuidado também para não confundir uma SIGLA com um numeral romano de
+subitem: "MDIC -", "CIF -", "ONU -" não são subitens internos "I -", "II
+-" — são siglas seguidas de explicação. Um numeral romano de subitem só
+faz sentido como tal se decodificar para um valor pequeno e plausível de
+enumeração (1 a ~20); fora isso, é sigla ou outra coisa, não subitem.
+
 Marcadores de lista automática do Word: quando um parágrafo começa com
 [ITEM_LISTA_NIVEL0], significa que o Word tinha uma numeração automática
 ali (que não aparece como dígito no texto) e o nível sugere item principal
@@ -353,12 +371,33 @@ essa seção só porque está longe.
 
 Para cada questão, extraia:
 
-- "titulo": título curto (use "Questão N" se não houver título explícito)
+- "titulo": use o cabeçalho da questão POR INTEIRO, exatamente como está no
+  texto — se aparecer "Questão 3 — Cardinalidade 1:N/N:N" ou "Questão 3:
+  Cardinalidade 1:N/N:N", o título é essa linha inteira, não apenas
+  "Questão 3". Só use o genérico "Questão N" quando não houver NENHUM texto
+  descritivo depois do número no cabeçalho.
 - "tipo": "Objetiva" (múltipla escolha) ou "Discursiva" (sem alternativas)
 - "enunciado": o texto da pergunta, SEM marcadores de formatação e SEM as alternativas
 - "correta": texto da alternativa correta, sem marcadores (vazio se Discursiva)
 - "incorretas": lista com o texto das demais alternativas, sem marcadores (vazio se Discursiva)
 - "justificativa": comentário/justificativa da resposta, se existir no texto (senão string vazia)
+- "tem_codigo_ou_calculo": true/false — veja regra abaixo
+
+Regra do campo "tem_codigo_ou_calculo": marque true se QUALQUER campo desta
+questão (enunciado, correta, incorretas ou justificativa) contiver:
+(a) um trecho de código de programação, em qualquer linguagem (Python, SQL,
+Java, C, JavaScript, pseudocódigo, HTML, etc.) — reconheça por sintaxe
+típica: chaves { }, ponto e vírgula, palavras-chave (def, class, function,
+SELECT, INSERT, void, public, import, #include, <tag>, etc.), indentação
+de código, ou blocos de comando; OU
+(b) uma fórmula, equação ou operação matemática/de cálculo — expressões
+com operadores (+, -, *, /, ^, =), frações, raízes, somatórios, potências,
+ou qualquer cálculo numérico que o aluno precise resolver.
+Marque false se não houver nada disso — texto comum, mesmo com números
+soltos (datas, quantidades, percentuais mencionados em prosa), não conta.
+Essa marcação decide se a questão vai para GIFT ou XML depois (código e
+fórmulas têm caracteres que colidem com a sintaxe do GIFT), então erre para
+o lado de marcar true em caso de dúvida real.
 
 Regras importantes:
 - Remova os marcadores [VERMELHO], [MARCADO], [NEGRITO] do resultado final — são só pistas, não devem aparecer no texto extraído.
@@ -378,10 +417,40 @@ SCHEMA_RESPOSTA = {
             "correta": {"type": "STRING"},
             "incorretas": {"type": "ARRAY", "items": {"type": "STRING"}},
             "justificativa": {"type": "STRING"},
+            "tem_codigo_ou_calculo": {"type": "BOOLEAN"},
         },
-        "required": ["titulo", "tipo", "enunciado", "correta", "incorretas", "justificativa"],
+        "required": [
+            "titulo", "tipo", "enunciado", "correta", "incorretas",
+            "justificativa", "tem_codigo_ou_calculo",
+        ],
     },
 }
+
+# Rede de segurança determinística: mesmo que a IA erre a marcação acima,
+# essas expressões pegam os casos mais óbvios de código/matemática por
+# regex — combinada por OR com o campo que a IA devolveu.
+_PADRAO_CODIGO = re.compile(
+    r"(\bdef\s+\w+\s*\(|\bclass\s+\w+|\bfunction\s*\(|\bSELECT\b.+\bFROM\b"
+    r"|\bINSERT\s+INTO\b|\bpublic\s+(static\s+)?\w+\s+\w+\s*\(|#include\s*<"
+    r"|\bimport\s+\w+|console\.log\s*\(|System\.out\.print"
+    r"|[{;]\s*$|^\s*[{}]\s*$|<\?php|</?[a-z]+[^>]*>)",
+    re.IGNORECASE | re.MULTILINE,
+)
+_PADRAO_CALCULO = re.compile(
+    r"(\d+\s*[\+\-\*/\^]\s*\d+\s*=|[√∑∫≥≤±÷×∞]|\\frac|\\sqrt"
+    r"|\b\d+\s*x\s*\d*\s*[\+\-]|[a-zA-Z]\(\s*x\s*\)\s*=)"
+)
+
+
+def _contem_codigo_ou_calculo_regex(questao: dict) -> bool:
+    campos = [
+        questao.get("enunciado", ""),
+        questao.get("correta", ""),
+        " ".join(questao.get("incorretas", [])),
+        questao.get("justificativa", ""),
+    ]
+    texto_completo = "\n".join(campos)
+    return bool(_PADRAO_CODIGO.search(texto_completo) or _PADRAO_CALCULO.search(texto_completo))
 
 
 # =========================
@@ -437,6 +506,10 @@ def extrair_questoes_via_ia(
         # parâmetro. Calculadas aqui, não pela IA, pelo mesmo motivo de
         # sempre: são fatos que já temos com certeza, não algo a "adivinhar".
         q["tags"] = [disciplina, q["tipo"]]
+        # tem_codigo_ou_calculo: usa o julgamento da IA (que entende o
+        # conteúdo) OU a checagem por regex (rede de segurança) — se
+        # qualquer um dos dois disser que sim, vale sim.
+        q["tem_codigo_ou_calculo"] = bool(q.get("tem_codigo_ou_calculo")) or _contem_codigo_ou_calculo_regex(q)
 
     return questoes
 
@@ -445,16 +518,22 @@ def definir_formato_arquivo(questoes: list[dict]) -> str:
     """
     Decide o formato do ARQUIVO INTEIRO (não por questão individual).
 
-    Regra: se QUALQUER questão do lote tiver sobrado algum marcador
-    __MOODLE_IMAGE_...__ em algum campo de texto, o arquivo inteiro sai em
-    XML (que sabe embutir imagem em base64). Só se NENHUMA questão tiver
-    imagem, o arquivo inteiro sai em GIFT (texto puro).
+    Regra: o arquivo inteiro sai em XML se QUALQUER questão do lote tiver:
+    (a) sobrado algum marcador __MOODLE_IMAGE_...__ em algum campo de
+        texto (a questão tem imagem); OU
+    (b) o campo "tem_codigo_ou_calculo" marcado true (código de
+        programação ou fórmula/cálculo em algum campo) — o GIFT escapa
+        caracteres como { } = ~ # :, o que corromperia código e fórmulas;
+        o XML não tem esse problema, então é a escolha mais segura.
+    Só quando NENHUMA questão do lote cair em (a) ou (b), o arquivo sai em
+    GIFT (texto puro, mais simples).
 
-    Calculado aqui no código (não pela IA) pelo mesmo motivo de antes: é
-    uma checagem de string determinística sobre marcadores que nós mesmos
-    geramos, então não depende de julgamento do modelo.
+    O sinal de imagem é calculado por string (determinístico); o sinal de
+    código/cálculo já vem combinado (IA + regex) do passo de extração.
     """
     for questao in questoes:
+        if questao.get("tem_codigo_ou_calculo"):
+            return "xml"
         campos = [
             questao.get("enunciado", ""),
             questao.get("correta", ""),
