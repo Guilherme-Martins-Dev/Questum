@@ -1,0 +1,628 @@
+"""
+Extração de questões via IA (Gemini) — protótipo isolado para teste.
+
+Este módulo é INDEPENDENTE do seu script principal (questões.py): dá pra
+rodar sozinho para validar a qualidade da extração antes de integrar ao
+pipeline completo (GIFT/XML).
+
+Requer:
+    pip install google-genai python-docx
+
+Uso:
+    export GEMINI_API_KEY="sua_chave_aqui"    # ou $env:GEMINI_API_KEY="..." no PowerShell
+    python extracao_ia_gemini.py caminho/para/prova.docx
+
+A chave é gratuita em: https://aistudio.google.com/apikey
+Modelo padrão: gemini-3.5-flash-lite (GA, com tier gratuito, ideal para
+extração/estruturação de texto de alto volume).
+"""
+
+from __future__ import annotations
+
+import re
+
+import base64
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+from docx import Document
+from docx.enum.text import WD_COLOR_INDEX
+from docx.oxml.ns import qn
+from docx.table import Table
+from docx.text.paragraph import Paragraph
+
+from google import genai
+from google.genai import types
+
+# Registro preenchido durante a leitura do .docx: nome único -> dados da
+# imagem. Mesma ideia do IMAGENS_EXTRAIDAS do seu script original — guarde
+# essa variável se quiser usar os bytes das imagens depois, na hora de
+# montar o GIFT/XML de verdade (substituindo os marcadores por <img>).
+IMAGENS_EXTRAIDAS: dict[str, dict] = {}
+
+
+# =========================
+# DETECÇÃO DE FORMATAÇÃO
+# (mesma lógica do seu run_vermelho/run_amarelo/run_negrito original —
+#  reaproveite as suas se preferir importar do questões.py)
+# =========================
+def run_vermelho(run) -> bool:
+    """
+    Detecta texto marcado em tom de vermelho — não só o vermelho puro
+    (FF0000). Em documentos reais, professores usam tons variados
+    (990000, CC0000, etc.) ao marcar manualmente a resposta correta.
+    Regra: canal R dominante e G/B baixos o suficiente pra não confundir
+    com laranja, marrom ou rosa.
+    """
+    color = getattr(getattr(run.font, "color", None), "rgb", None)
+    if color is None:
+        return False
+    cor = str(color).upper()
+    if len(cor) != 6:
+        return False
+    try:
+        r, g, b = int(cor[0:2], 16), int(cor[2:4], 16), int(cor[4:6], 16)
+    except ValueError:
+        return False
+    return r >= 100 and g <= 80 and b <= 80 and r > g + 40 and r > b + 40
+
+
+def run_amarelo(run) -> bool:
+    highlight = getattr(run.font, "highlight_color", None)
+    return highlight == WD_COLOR_INDEX.YELLOW
+
+
+def run_negrito(run) -> bool:
+    return bool(run.bold)
+
+
+def obter_info_lista_word(paragrafo) -> tuple[int | None, int | None]:
+    """
+    Alguns .docx usam numeração AUTOMÁTICA do Word para questões/alternativas
+    (o Word desenha "1." ou "a)" na tela, mas esse número não existe no
+    paragraph.text — é metadado da lista, invisível pra extração normal de
+    texto). Sem captar isso, esses documentos chegariam à IA sem nenhuma
+    numeração visível, e a segmentação ficaria praticamente impossível.
+
+    Convenção observada: ilvl == 0 costuma ser o item principal (a questão);
+    ilvl == 1 costuma ser o subitem (a alternativa). Não é garantido, mas é
+    um sinal estrutural forte, independente de regex sobre o texto.
+    """
+    pPr = paragrafo._p.pPr
+    if pPr is None or pPr.numPr is None:
+        return None, None
+
+    numPr = pPr.numPr
+    num_id, ilvl = None, None
+    if numPr.numId is not None:
+        try:
+            num_id = int(numPr.numId.val)
+        except (TypeError, ValueError):
+            pass
+    if numPr.ilvl is not None:
+        try:
+            ilvl = int(numPr.ilvl.val)
+        except (TypeError, ValueError):
+            pass
+    return num_id, ilvl
+
+
+def _extensao_por_mime(content_type: str, nome_original: str = "") -> str:
+    mapa = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+        "image/bmp": ".bmp",
+    }
+    if content_type in mapa:
+        return mapa[content_type]
+    sufixo = Path(nome_original).suffix.lower()
+    return sufixo if sufixo else ".bin"
+
+
+def extrair_imagens_do_paragrafo(paragrafo, doc) -> list[str]:
+    """
+    Localiza imagens ancoradas no parágrafo (DrawingML e VML legado),
+    registra os bytes em IMAGENS_EXTRAIDAS e devolve a lista de
+    marcadores de texto (__MOODLE_IMAGE_<hash>__) na ordem em que aparecem.
+    Mesma técnica do seu extrair_imagens_do_paragrafo original.
+    """
+    marcadores = []
+    rel_ids = []
+
+    for blip in paragrafo._p.xpath('.//*[local-name()="blip"]'):
+        rid = blip.get(qn("r:embed"))
+        if rid:
+            rel_ids.append(rid)
+
+    for image_data in paragrafo._p.xpath('.//*[local-name()="imagedata"]'):
+        rid = image_data.get(qn("r:id"))
+        if rid:
+            rel_ids.append(rid)
+
+    for rid in rel_ids:
+        parte = doc.part.related_parts.get(rid)
+        if parte is None or not hasattr(parte, "blob"):
+            continue
+
+        dados = parte.blob
+        content_type = getattr(parte, "content_type", "application/octet-stream")
+        nome_original = Path(str(getattr(parte, "partname", "imagem"))).name
+        extensao = _extensao_por_mime(content_type, nome_original)
+        digest = hashlib.sha256(dados).hexdigest()[:16]
+        nome = f"img_{digest}{extensao}"
+        marcador = f"__MOODLE_IMAGE_{digest.upper()}__"
+
+        if nome not in IMAGENS_EXTRAIDAS:
+            IMAGENS_EXTRAIDAS[nome] = {
+                "nome": nome,
+                "marcador": marcador,
+                "content_type": content_type,
+                "base64": base64.b64encode(dados).decode("ascii"),
+            }
+
+        marcadores.append(marcador)
+
+    return marcadores
+
+
+def _iter_blocos_documento(doc):
+    """
+    Percorre parágrafos E TABELAS na ordem real em que aparecem no
+    documento (por padrão, doc.paragraphs e doc.tables vêm em duas listas
+    separadas, perdendo a posição relativa entre eles). Sem isso, uma
+    tabela de gabarito/dificuldade que aparece entre as questões ficaria
+    invisível pra extração — ela simplesmente não é lida.
+    """
+    for filho in doc.element.body.iterchildren():
+        if filho.tag == qn("w:p"):
+            yield Paragraph(filho, doc)
+        elif filho.tag == qn("w:tbl"):
+            yield Table(filho, doc)
+
+
+def _texto_tabela_marcado(tabela) -> str:
+    """
+    Representa uma tabela do Word como texto simples, uma linha por linha
+    da tabela, colunas separadas por " | ". Preserva a informação (ex:
+    tabela de gabarito com colunas Questão/Resposta/Dificuldade) sem
+    tentar interpretar o significado — isso fica a cargo da IA.
+    """
+    linhas_tabela = []
+    for linha in tabela.rows:
+        celulas = [celula.text.strip() for celula in linha.cells]
+        linhas_tabela.append(" | ".join(celulas))
+    corpo = "\n".join(linhas_tabela)
+    return f"[TABELA]\n{corpo}\n[/TABELA]"
+
+
+# =========================
+# 1) DOCX -> TEXTO MARCADO
+# =========================
+def extrair_texto_marcado(docx_path: str) -> str:
+    """
+    Lê o .docx e devolve um texto único, com marcadores inline indicando
+    formatação: [VERMELHO], [MARCADO] (destaque amarelo) e [NEGRITO].
+    Também inclui o conteúdo de tabelas (ex: uma tabela-resumo de gabarito
+    ou dificuldade), marcado com [TABELA]...[/TABELA], na posição em que
+    aparece no documento.
+
+    Esse texto marcado é o que vai para a IA — ele preserva os mesmos
+    sinais visuais que suas heurísticas originais usam para achar a
+    alternativa correta, só que em forma de texto que o modelo consegue ler.
+    """
+    doc = Document(docx_path)
+    linhas = []
+
+    for bloco in _iter_blocos_documento(doc):
+        if isinstance(bloco, Paragraph):
+            paragrafo = bloco
+            texto = paragrafo.text.strip()
+            marcadores_imagem = extrair_imagens_do_paragrafo(paragrafo, doc)
+
+            if not texto and not marcadores_imagem:
+                continue
+
+            if texto:
+                partes = []
+                for run in paragrafo.runs:
+                    trecho = run.text
+                    if not trecho.strip():
+                        partes.append(trecho)
+                        continue
+
+                    abre, fecha = "", ""
+                    if run_vermelho(run):
+                        abre, fecha = abre + "[VERMELHO]", "[/VERMELHO]" + fecha
+                    if run_amarelo(run):
+                        abre, fecha = abre + "[MARCADO]", "[/MARCADO]" + fecha
+                    if run_negrito(run):
+                        abre, fecha = abre + "[NEGRITO]", "[/NEGRITO]" + fecha
+
+                    partes.append(f"{abre}{trecho}{fecha}")
+
+                linha_texto = "".join(partes).strip() or texto
+
+                # Numeração automática do Word (sem dígito visível no texto):
+                # marca o nível pra a IA usar como pista estrutural extra.
+                _, ilvl = obter_info_lista_word(paragrafo)
+                if ilvl == 0:
+                    linha_texto = f"[ITEM_LISTA_NIVEL0] {linha_texto}"
+                elif ilvl == 1:
+                    linha_texto = f"[ITEM_LISTA_NIVEL1] {linha_texto}"
+
+                linhas.append(linha_texto)
+
+            # Marcador entra em linha própria, logo após o texto do
+            # parágrafo — mesma posição que o script original usa.
+            for marcador in marcadores_imagem:
+                linhas.append(marcador)
+        else:
+            # É uma tabela.
+            linhas.append(_texto_tabela_marcado(bloco))
+
+    return "\n".join(linhas)
+
+
+# =========================
+# 2) PROMPT + SCHEMA DE SAÍDA
+# =========================
+INSTRUCAO_SISTEMA = """
+Você recebe o texto extraído de uma prova em Word. O texto pode conter
+marcadores de formatação original: [VERMELHO]...[/VERMELHO],
+[MARCADO]...[/MARCADO] (destaque amarelo) e [NEGRITO]...[/NEGRITO]. Esses
+marcadores costumam indicar a alternativa correta — mas nem sempre. Use
+também o contexto (ex: um gabarito escrito ao final do texto, tipo
+"Resposta: C" ou "Alternativa correta: B").
+
+O texto também pode conter marcadores de imagem no formato exato
+__MOODLE_IMAGE_<código>__ (ex: __MOODLE_IMAGE_A1B2C3D4E5F6A7B8__). Cada um
+representa uma imagem que estava naquela posição do documento original.
+Regras para esses marcadores:
+- Copie o marcador EXATAMENTE como aparece (mesmos caracteres, mesmo
+  código), sem alterar, sem inventar, sem descrever a imagem.
+- Preserve a posição relativa dele: se a imagem aparecia dentro do
+  enunciado, o marcador vai no campo "enunciado"; se aparecia dentro de
+  uma alternativa, vai no texto dessa alternativa; se aparecia depois do
+  comentário, vai em "justificativa".
+- Nunca remova um marcador de imagem nem o mova para um campo diferente
+  de onde ele estava no texto original.
+
+Sua tarefa: identificar cada questão do texto e devolver uma lista
+estruturada. IMPORTANTE sobre a identificação: este texto vem de provas
+feitas por professores/conteudistas diferentes, e cada um formata do seu
+jeito — não existe um padrão único. Você pode encontrar, por exemplo:
+numeração "1.", "01)", "Questão 1", "QUESTÃO 01", títulos em negrito,
+enunciados sem nenhuma numeração (só separados por parágrafo em branco),
+alternativas com "a)", "A)", "I.", "-", ou letras entre parênteses, gabarito
+disperso ao final do documento em vez de logo após a questão, blocos com ou
+sem justificativa. Não assuma um formato fixo: use o SENTIDO do texto (uma
+pergunta seguida de um conjunto de opções de resposta = uma questão) para
+decidir onde uma questão termina e a próxima começa, mesmo que a
+numeração/formatação mude no meio do mesmo documento.
+
+Cuidado com FALSO POSITIVO comum: uma linha curta tipo "1. Conceito de
+psicomotricidade" ou "2. Introdução à ética" é um SUBTÍTULO TEMÁTICO (título
+de seção/tema), não uma questão — mesmo tendo numeração parecida com uma
+questão. Sinais de que é subtítulo, não questão: é curto (até ~12
+palavras), não termina em ":" nem "?", e não contém palavra de comando
+típica de enunciado ("assinale", "marque", "identifique", "indique",
+"avalie", "considere", "qual", "quais", "corresponde a", "refere-se a").
+Trate esses subtítulos como contexto/seção, não como questão nem como
+conteúdo de nenhuma questão.
+
+Cuidado também para não confundir uma SIGLA com um numeral romano de
+subitem: "MDIC -", "CIF -", "ONU -" não são subitens internos "I -", "II
+-" — são siglas seguidas de explicação. Um numeral romano de subitem só
+faz sentido como tal se decodificar para um valor pequeno e plausível de
+enumeração (1 a ~20); fora isso, é sigla ou outra coisa, não subitem.
+
+Marcadores de lista automática do Word: quando um parágrafo começa com
+[ITEM_LISTA_NIVEL0], significa que o Word tinha uma numeração automática
+ali (que não aparece como dígito no texto) e o nível sugere item principal
+— normalmente uma questão nova. [ITEM_LISTA_NIVEL1] é o nível seguinte —
+normalmente uma alternativa dessa questão. Use isso como pista estrutural
+adicional, junto com o sentido do texto (não é garantia absoluta: um título
+de seção também pode estar no nível 0). Remova esses marcadores do
+resultado final, eles não fazem parte do conteúdo da questão.
+
+Catálogo de padrões já observados neste tipo de documento (use como
+referência, não como lista fechada):
+- Cabeçalhos de SEÇÃO, não são questões: "Unidade 3", "Unidade III",
+  "Bloco 2", "Assunto: ...", "Fórum 1", "Questionário 2",
+  "QUESTIONÁRIO DAS UNIDADES". Não viram conteúdo de questão, mas quando
+  for "Unidade N" ou "Bloco N" (ou variação, tipo "Unidade 01 —
+  descrição"), use isso para preencher o campo "unidade" (ver abaixo) de
+  toda questão que aparecer depois desse cabeçalho, até aparecer outro
+  cabeçalho de unidade diferente.
+- Frases-gatilho que indicam um enunciado real de questão objetiva (ajudam
+  a diferenciar de um subtítulo temático curto, tipo "1. Conceito de
+  psicomotricidade", que NÃO é questão): "assinale a alternativa...",
+  "marque a opção...", "é correto afirmar...", "avalie as afirmativas...",
+  "considerando o texto acima...", "qual das alternativas...".
+- Subitens dentro da MESMA questão (não são alternativas nem novas
+  questões) — comum em questões de "julgue as afirmativas": "I – ...",
+  "II – ...", letras maiúsculas soltas "A – ...", ou marcadores de V/F
+  "( ) ...". Sequências como "V, F, V" ou "V, V, F" também indicam
+  julgamento de afirmativas, não uma questão nova.
+
+Padrão importante — AFIRMATIVAS SEM NUMERAÇÃO VISÍVEL + alternativas de
+combinação: às vezes as afirmativas a serem julgadas NÃO têm nenhum "I."
+ou "II." escrito no texto — são só frases/parágrafos soltos, um atrás do
+outro, e só DEPOIS aparecem as alternativas de resposta, que são
+combinações curtas desses itens (pela posição: 1º parágrafo = I, 2º = II,
+3º = III...). Exemplo real:
+    (enunciado) Com relação a história... marque o item VERDADEIRO:
+    A ideia central de responsabilidade social... [seria a afirmativa I]
+    A responsabilidade social das empresas teve início... [afirmativa II]
+    Em 1970 a responsabilidade social... [afirmativa III]
+    Em 1979 a responsabilidade social... [afirmativa IV]
+    I e II
+    II e III
+    I, II e III
+    I, II, III e IV
+    COMENTÁRIO: ...
+Nesse padrão, as 4 frases longas (sem numeração visível) são AFIRMATIVAS,
+e ficam dentro do campo "enunciado" (mantenha-as na ordem, pode numerá-las
+I/II/III/IV você mesmo para ficar claro) — elas NUNCA vão para "correta"
+nem para "incorretas". Só as 4 frases curtas finais ("I e II", "II e III"
+etc.) são as alternativas de resposta de verdade. Esse é o erro mais comum
+nesse tipo de documento: colocar as afirmativas longas dentro da lista de
+alternativas por engano, junto com as combinações — não faça isso.
+
+- Gabarito/resposta correta, geralmente ao final da questão ou do
+  documento: "✅ Resposta correta: B", "Resposta Correta - C",
+  "Gabarito: D", "[Gabarito]: A". A letra indicada corresponde à
+  alternativa correspondente na ordem em que as alternativas foram
+  listadas (A = primeira, B = segunda, etc.).
+- Comentário/justificativa da resposta: "💡 Comentário: ...",
+  "Feedback: ...", "Justificativa: ...". Quando o comentário explicar
+  quais afirmativas são verdadeiras/falsas, use essa conclusão para
+  escolher, entre as alternativas de combinação já listadas, qual bate
+  exatamente com o conjunto de afirmativas verdadeiras. Se a conclusão do
+  comentário não corresponder a NENHUMA alternativa listada, é sinal de
+  inconsistência no documento original — não force nem invente uma
+  correspondência; nesse caso, prefira deixar "correta" vazio e devolver
+  todas as opções em "incorretas" a arriscar uma resposta errada.
+- [VERMELHO] pode aparecer em tons diferentes de vermelho (não é sempre o
+  mesmo vermelho "puro") — trate qualquer trecho marcado com [VERMELHO]
+  como candidato a resposta correta, independentemente do tom exato.
+
+Padrão importante — GABARITO COMENTADO EM BLOCO, separado das questões:
+às vezes as questões vêm todas primeiro, sem nenhuma marcação de resposta
+correta nelas, e só depois aparece uma seção própria (cabeçalho tipo
+"GABARITO", "GABARITO COMENTADO", "RESPOSTAS COMENTADAS") com uma lista
+curta assim:
+    1. C – O material caracteriza a prática escolar predominante da
+    Antiguidade ao século XIX como uma aprendizagem passivo-receptiva...
+    2. B – O material apresenta a publicação da Didactica Magna...
+Nesse padrão, cada linha começa com o NÚMERO da questão (correspondente à
+ordem/numeração das questões no início do documento — "1." corresponde à
+primeira questão, "Questão 1"), seguido de um traço, seguido do texto
+completo da justificativa. Quando encontrar esse padrão, você deve: (1)
+usar o número para localizar a questão correspondente (elas aparecem na
+mesma ordem em que foram numeradas no início do documento); (2) usar a
+letra para escolher, entre as alternativas já listadas naquela questão,
+qual é a "correta"; (3) copiar o texto após o traço para o campo
+"justificativa" daquela questão. Isso vale mesmo que a lista de gabarito
+esteja dezenas de parágrafos depois da questão no documento — não ignore
+essa seção só porque está longe.
+
+Padrão importante — TABELAS: quando aparecer um bloco [TABELA]...[/TABELA],
+é uma tabela do Word representada linha a linha, colunas separadas por
+" | ". A primeira linha costuma ser o cabeçalho das colunas (ex:
+"Questão | Resposta | Dificuldade | Conteúdo"). Uma tabela assim pode
+funcionar como um gabarito-resumo: cada linha seguinte corresponde a uma
+questão pelo número, e as colunas trazem informações daquela questão
+(resposta correta, dificuldade, tema). Use o número da linha da tabela
+para casar com a questão correspondente (mesma lógica do gabarito
+comentado em lista, mas em formato de tabela).
+
+Unidade do conteúdo: quando o documento tiver um cabeçalho "Unidade N" ou
+"Bloco N" (ver catálogo acima), preencha "unidade" com um valor curto e
+normalizado, tipo "Unidade 1", "Unidade 3" (converta romano pra arábico:
+"Unidade III" vira "Unidade 3"). Um documento pode ter mais de uma unidade
+dentro dele (várias seções) — nesse caso cada questão leva a unidade do
+cabeçalho mais próximo ACIMA dela. Se o documento inteiro não tiver
+nenhum cabeçalho desse tipo, deixe "unidade" como string vazia.
+
+Dificuldade da questão: procure, no texto da questão ou numa tabela como
+a descrita acima, alguma indicação explícita do nível de dificuldade —
+rótulos como "Dificuldade: Fácil", "Nível: Médio", "Grau de dificuldade:
+Difícil", ou uma coluna de tabela chamada "Dificuldade"/"Nível". Só
+preencha o campo "dificuldade" quando isso estiver EXPLÍCITO no
+documento — não tente adivinhar ou julgar a dificuldade pelo conteúdo da
+questão. Normalize o valor para exatamente um destes três: "Fácil",
+"Média" (isso inclui variações como "média", "intermediária",
+"intermediário", "médio") ou "Difícil". Se não houver nenhuma indicação
+explícita de dificuldade em lugar nenhum do documento para aquela
+questão, deixe "dificuldade" como string vazia.
+
+Para cada questão, extraia:
+
+- "titulo": use o cabeçalho da questão POR INTEIRO, exatamente como está no
+  texto — se aparecer "Questão 3 — Cardinalidade 1:N/N:N" ou "Questão 3:
+  Cardinalidade 1:N/N:N", o título é essa linha inteira, não apenas
+  "Questão 3". Só use o genérico "Questão N" quando não houver NENHUM texto
+  descritivo depois do número no cabeçalho.
+- "tipo": "Objetiva" (múltipla escolha) ou "Discursiva" (sem alternativas)
+- "unidade": "Unidade N" ou "" (vazio) — ver regra acima
+- "dificuldade": "Fácil", "Média", "Difícil" ou "" (vazio) — ver regra acima
+- "enunciado": o texto da pergunta, SEM marcadores de formatação e SEM as alternativas
+- "correta": texto da alternativa correta, sem marcadores (vazio se Discursiva)
+- "incorretas": lista com o texto das demais alternativas, sem marcadores (vazio se Discursiva)
+- "justificativa": comentário/justificativa da resposta, se existir no texto (senão string vazia)
+- "tem_codigo_ou_calculo": true/false — veja regra abaixo
+
+Regra do campo "tem_codigo_ou_calculo": marque true se QUALQUER campo desta
+questão (enunciado, correta, incorretas ou justificativa) contiver:
+(a) um trecho de código de programação, em qualquer linguagem (Python, SQL,
+Java, C, JavaScript, pseudocódigo, HTML, etc.) — reconheça por sintaxe
+típica: chaves { }, ponto e vírgula, palavras-chave (def, class, function,
+SELECT, INSERT, void, public, import, #include, <tag>, etc.), indentação
+de código, ou blocos de comando; OU
+(b) uma fórmula, equação ou operação matemática/de cálculo — expressões
+com operadores (+, -, *, /, ^, =), frações, raízes, somatórios, potências,
+ou qualquer cálculo numérico que o aluno precise resolver.
+Marque false se não houver nada disso — texto comum, mesmo com números
+soltos (datas, quantidades, percentuais mencionados em prosa), não conta.
+Essa marcação decide se a questão vai para GIFT ou XML depois (código e
+fórmulas têm caracteres que colidem com a sintaxe do GIFT), então erre para
+o lado de marcar true em caso de dúvida real.
+
+Regras importantes:
+- Remova os marcadores [VERMELHO], [MARCADO], [NEGRITO] do resultado final — são só pistas, não devem aparecer no texto extraído.
+- Não invente conteúdo que não está no texto original.
+- Se não conseguir identificar com confiança qual alternativa é a correta, deixe "correta" vazio e devolva todas em "incorretas".
+- Seja consistente: para o mesmo texto de entrada, sua extração deve ser sempre a mesma (não varie redação nem estrutura entre execuções).
+""".strip()
+
+SCHEMA_RESPOSTA = {
+    "type": "ARRAY",
+    "items": {
+        "type": "OBJECT",
+        "properties": {
+            "titulo": {"type": "STRING"},
+            "tipo": {"type": "STRING", "enum": ["Objetiva", "Discursiva"]},
+            "unidade": {"type": "STRING"},
+            "dificuldade": {"type": "STRING"},
+            "enunciado": {"type": "STRING"},
+            "correta": {"type": "STRING"},
+            "incorretas": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "justificativa": {"type": "STRING"},
+            "tem_codigo_ou_calculo": {"type": "BOOLEAN"},
+        },
+        "required": [
+            "titulo", "tipo", "unidade", "dificuldade", "enunciado", "correta",
+            "incorretas", "justificativa", "tem_codigo_ou_calculo",
+        ],
+    },
+}
+
+# Rede de segurança determinística: mesmo que a IA erre a marcação acima,
+# essas expressões pegam os casos mais óbvios de código/matemática por
+# regex — combinada por OR com o campo que a IA devolveu.
+_PADRAO_CODIGO = re.compile(
+    r"(\bdef\s+\w+\s*\(|\bclass\s+\w+|\bfunction\s*\(|\bSELECT\b.+\bFROM\b"
+    r"|\bINSERT\s+INTO\b|\bpublic\s+(static\s+)?\w+\s+\w+\s*\(|#include\s*<"
+    r"|\bimport\s+\w+|console\.log\s*\(|System\.out\.print"
+    r"|[{;]\s*$|^\s*[{}]\s*$|<\?php|</?[a-z]+[^>]*>)",
+    re.IGNORECASE | re.MULTILINE,
+)
+_PADRAO_CALCULO = re.compile(
+    r"(\d+\s*[\+\-\*/\^]\s*\d+\s*=|[√∑∫≥≤±÷×∞]|\\frac|\\sqrt"
+    r"|\b\d+\s*x\s*\d*\s*[\+\-]|[a-zA-Z]\(\s*x\s*\)\s*=)"
+)
+
+
+def _contem_codigo_ou_calculo_regex(questao: dict) -> bool:
+    campos = [
+        questao.get("enunciado", ""),
+        questao.get("correta", ""),
+        " ".join(questao.get("incorretas", [])),
+        questao.get("justificativa", ""),
+    ]
+    texto_completo = "\n".join(campos)
+    return bool(_PADRAO_CODIGO.search(texto_completo) or _PADRAO_CALCULO.search(texto_completo))
+
+
+# =========================
+# 3) CHAMADA À API (Gemini)
+# =========================
+def extrair_questoes_via_ia(
+    texto_marcado: str,
+    disciplina: str,
+    modelo: str = "gemini-3.5-flash-lite",
+) -> list[dict]:
+    """
+    Envia o texto marcado para o Gemini e devolve uma lista de dicts no
+    MESMO formato que seus parse_questao_*() já produzem hoje, para poder
+    plugar direto em montar_gift() / gerar_moodle_xml() depois.
+
+    'disciplina' vem de fora (você informa), não é adivinhada pela IA: o
+    nome da disciplina raramente está escrito de forma confiável dentro do
+    texto da prova, então é mais seguro receber como parâmetro do que
+    arriscar a IA inventar ou errar.
+
+    Nota: a partir do Gemini 3.x, os parâmetros temperature/top_p/top_k
+    foram descontinuados (a API os ignora) — por isso não aparecem aqui.
+    O controle de consistência agora vem da instrução de sistema.
+    thinking_level="minimal" é o padrão do Flash-Lite e já é o ideal para
+    uma tarefa de extração/estruturação como essa (mais rápido e barato).
+    """
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("Defina a variável de ambiente GEMINI_API_KEY antes de rodar.")
+
+    client = genai.Client(api_key=api_key)
+
+    resposta = client.models.generate_content(
+        model=modelo,
+        contents=texto_marcado,
+        config=types.GenerateContentConfig(
+            system_instruction=INSTRUCAO_SISTEMA,
+            response_mime_type="application/json",
+            response_schema=SCHEMA_RESPOSTA,
+            thinking_config=types.ThinkingConfig(thinking_level="minimal"),
+        ),
+    )
+
+    if not resposta.text:
+        raise RuntimeError("O Gemini não retornou conteúdo.")
+
+    questoes = json.loads(resposta.text)
+
+    for q in questoes:
+        q["modo"] = "extraido_via_ia"
+        q["qtd_alternativas"] = (1 + len(q.get("incorretas", []))) if q["tipo"] == "Objetiva" else 0
+        # Tags: tipo, unidade e dificuldade já vieram da IA; disciplina vem
+        # do parâmetro. Disciplina/tipo calculados aqui, não pela IA, pelo
+        # mesmo motivo de sempre: já temos certeza deles. Unidade e
+        # dificuldade são opcionais — só entram na tag quando a IA achou
+        # indicação explícita no documento (campo não vazio).
+        q["tags"] = [disciplina, q["tipo"]]
+        if q.get("unidade"):
+            q["tags"].append(q["unidade"])
+        if q.get("dificuldade"):
+            q["tags"].append(q["dificuldade"])
+        # tem_codigo_ou_calculo: usa o julgamento da IA (que entende o
+        # conteúdo) OU a checagem por regex (rede de segurança) — se
+        # qualquer um dos dois disser que sim, vale sim. Não decide mais
+        # formato de arquivo (só existe XML agora), mas fica como metadado
+        # útil — pode virar tag no futuro se quiser filtrar por isso.
+        q["tem_codigo_ou_calculo"] = bool(q.get("tem_codigo_ou_calculo")) or _contem_codigo_ou_calculo_regex(q)
+
+    return questoes
+
+
+# =========================
+# EXECUÇÃO DIRETA (TESTE MANUAL)
+# =========================
+def main():
+    if len(sys.argv) < 3:
+        print("Uso: python extracao_ia_gemini.py caminho/para/prova.docx \"Nome da Disciplina\"")
+        sys.exit(1)
+
+    caminho = Path(sys.argv[1])
+    disciplina = sys.argv[2]
+    if not caminho.exists():
+        print(f"Arquivo não encontrado: {caminho}")
+        sys.exit(1)
+
+    print(f"[INFO] Lendo {caminho.name}...")
+    texto_marcado = extrair_texto_marcado(str(caminho))
+    print(f"[INFO] {len(IMAGENS_EXTRAIDAS)} imagem(ns) encontrada(s) no documento.")
+
+    print("[INFO] Enviando para a IA (Gemini)...")
+    questoes = extrair_questoes_via_ia(texto_marcado, disciplina=disciplina)
+
+    print(f"\n[OK] {len(questoes)} questão(ões) extraída(s):\n")
+    print(json.dumps(questoes, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()

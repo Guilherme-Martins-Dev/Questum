@@ -1,3 +1,23 @@
+# =============================================================================
+# ARQUIVADO — legacy-heuristico/
+#
+# Este módulo é o núcleo original do Questum: extração de questões via
+# heurísticas + regex, com um parser dedicado por padrão de prova já
+# identificado.
+#
+# Descontinuado em favor do pipeline de extração via IA (Gemini), disponível
+# na branch `developer` em extracao_ia_gemini.py + formatador.py + main.py.
+#
+# Motivo: em comparação com casos reais, a extração via IA apresentou
+# eficiência muito maior. Este script exigia um parser novo a cada padrão de
+# prova diferente e, ao encontrar um formato de arquivo ainda não previsto,
+# frequentemente falhava ou não conseguia importar as questões. A cada nova
+# regra o arquivo crescia em linhas, tornando a manutenção e a otimização
+# progressivamente mais difíceis.
+#
+# Mantido apenas como referência histórica / comparação pontual.
+# =============================================================================
+
 from docx import Document
 from docx.enum.text import WD_COLOR_INDEX
 from pathlib import Path
