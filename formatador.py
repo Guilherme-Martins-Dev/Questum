@@ -1,13 +1,14 @@
 """
 Formatador — transforma questões estruturadas (dicts vindos da extração via
-IA) em texto GIFT ou XML do Moodle.
+IA) em XML do Moodle.
 
 Este módulo NÃO fala com nenhuma IA. Ele só recebe:
-    - a lista de questões (cada uma já com "formato": "gift" ou "xml")
+    - a lista de questões (já estruturadas)
     - o dicionário IMAGENS_EXTRAIDAS (nome -> {marcador, base64, content_type})
 
-e escreve os arquivos finais. Roteamento: cada questão vai para GIFT ou XML
-de acordo com o campo "formato" que a etapa de extração já calculou.
+e escreve o arquivo XML final. Só existe o caminho XML — o suporte a GIFT
+foi removido porque o restante do projeto já opera inteiramente em XML, e
+manter os dois formatos era complexidade sem necessidade real.
 """
 
 from __future__ import annotations
@@ -18,52 +19,6 @@ from pathlib import Path
 from xml.dom import minidom
 
 
-# =========================
-# GIFT (questões sem imagem)
-# =========================
-def escapar_gift(texto: str) -> str:
-    """Escapa os caracteres especiais do formato GIFT."""
-    if not texto:
-        return ""
-    substituicoes = {
-        "\\": "\\\\",
-        "~": "\\~",
-        "=": "\\=",
-        "#": "\\#",
-        "{": "\\{",
-        "}": "\\}",
-        ":": "\\:",
-    }
-    for original, escapado in substituicoes.items():
-        texto = texto.replace(original, escapado)
-    return texto
-
-
-def montar_bloco_gift(questao: dict) -> str:
-    """Monta um bloco GIFT para uma questão sem imagens, com as tags como comentário."""
-    linhas = [f"// [tag: {tag}]" for tag in questao.get("tags", [])]
-    linhas.append(f"::{escapar_gift(questao['titulo'])}::")
-    linhas.append(escapar_gift(questao["enunciado"]))
-
-    if questao.get("tipo") == "Discursiva":
-        linhas.append("{}")
-        return "\n".join(linhas)
-
-    linhas.append("{")
-    linhas.append(f"    ={escapar_gift(questao['correta'])}")
-    for alternativa in questao.get("incorretas", []):
-        linhas.append(f"    ~{escapar_gift(alternativa)}")
-
-    if questao.get("justificativa"):
-        linhas.append(f"    #### {escapar_gift(questao['justificativa'])}")
-
-    linhas.append("}")
-    return "\n".join(linhas)
-
-
-# =========================
-# XML do Moodle (questões com imagem)
-# =========================
 def _imagem_por_marcador(marcador: str, imagens_extraidas: dict) -> dict | None:
     for imagem in imagens_extraidas.values():
         if imagem["marcador"] == marcador:
@@ -154,6 +109,9 @@ def montar_elemento_xml(questao: dict, imagens_extraidas: dict) -> ET.Element:
     ET.SubElement(q, "answernumbering").text = "abc"
 
     fracao_correta = "100"
+    # Fração 0 fixa: alternativa incorreta não pontua, mas também não
+    # penaliza (sem fração negativa) — diferente da prática de dividir
+    # -100 entre as incorretas, que subtrairia pontos por errar.
     fracao_incorreta = "0"
 
     correta_html, imagens_correta = _texto_html_com_imagens(
@@ -172,33 +130,19 @@ def montar_elemento_xml(questao: dict, imagens_extraidas: dict) -> ET.Element:
     return q
 
 
-# =========================
-# ORQUESTRAÇÃO: separa por formato e escreve os arquivos
-# =========================
 def gerar_arquivo(
     questoes: list[dict],
     imagens_extraidas: dict,
-    formato: str,
     pasta_saida: str = ".",
     disciplina: str = "Banco de Questões",
+    nome_arquivo: str = "banco_questoes.xml",
 ) -> None:
-    """
-    Escreve UM arquivo só, com todas as questões, no formato decidido para
-    o lote inteiro ("gift" ou "xml" — ver definir_formato_arquivo em
-    extracao_ia_gemini.py).
-    """
+    """Escreve UM arquivo XML só, com todas as questões do lote."""
     pasta = Path(pasta_saida)
     pasta.mkdir(parents=True, exist_ok=True)
 
     if not questoes:
         print("[AVISO] Nenhuma questão para gerar.")
-        return
-
-    if formato == "gift":
-        blocos = [montar_bloco_gift(q) for q in questoes]
-        caminho = pasta / "banco_questoes.gift"
-        caminho.write_text("\n\n".join(blocos), encoding="utf-8")
-        print(f"[OK] {len(questoes)} questão(ões), formato GIFT -> {caminho}")
         return
 
     quiz = ET.Element("quiz")
@@ -210,6 +154,6 @@ def gerar_arquivo(
         quiz.append(montar_elemento_xml(questao, imagens_extraidas))
 
     xml_bonito = minidom.parseString(ET.tostring(quiz, encoding="utf-8")).toprettyxml(indent="  ")
-    caminho = pasta / "banco_questoes.xml"
+    caminho = pasta / nome_arquivo
     caminho.write_text(xml_bonito, encoding="utf-8")
-    print(f"[OK] {len(questoes)} questão(ões), formato XML -> {caminho}")
+    print(f"[OK] {len(questoes)} questão(ões) -> {caminho}")

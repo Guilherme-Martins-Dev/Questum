@@ -31,6 +31,8 @@ from pathlib import Path
 from docx import Document
 from docx.enum.text import WD_COLOR_INDEX
 from docx.oxml.ns import qn
+from docx.table import Table
+from docx.text.paragraph import Paragraph
 
 from google import genai
 from google.genai import types
@@ -168,6 +170,36 @@ def extrair_imagens_do_paragrafo(paragrafo, doc) -> list[str]:
     return marcadores
 
 
+def _iter_blocos_documento(doc):
+    """
+    Percorre parágrafos E TABELAS na ordem real em que aparecem no
+    documento (por padrão, doc.paragraphs e doc.tables vêm em duas listas
+    separadas, perdendo a posição relativa entre eles). Sem isso, uma
+    tabela de gabarito/dificuldade que aparece entre as questões ficaria
+    invisível pra extração — ela simplesmente não é lida.
+    """
+    for filho in doc.element.body.iterchildren():
+        if filho.tag == qn("w:p"):
+            yield Paragraph(filho, doc)
+        elif filho.tag == qn("w:tbl"):
+            yield Table(filho, doc)
+
+
+def _texto_tabela_marcado(tabela) -> str:
+    """
+    Representa uma tabela do Word como texto simples, uma linha por linha
+    da tabela, colunas separadas por " | ". Preserva a informação (ex:
+    tabela de gabarito com colunas Questão/Resposta/Dificuldade) sem
+    tentar interpretar o significado — isso fica a cargo da IA.
+    """
+    linhas_tabela = []
+    for linha in tabela.rows:
+        celulas = [celula.text.strip() for celula in linha.cells]
+        linhas_tabela.append(" | ".join(celulas))
+    corpo = "\n".join(linhas_tabela)
+    return f"[TABELA]\n{corpo}\n[/TABELA]"
+
+
 # =========================
 # 1) DOCX -> TEXTO MARCADO
 # =========================
@@ -175,6 +207,9 @@ def extrair_texto_marcado(docx_path: str) -> str:
     """
     Lê o .docx e devolve um texto único, com marcadores inline indicando
     formatação: [VERMELHO], [MARCADO] (destaque amarelo) e [NEGRITO].
+    Também inclui o conteúdo de tabelas (ex: uma tabela-resumo de gabarito
+    ou dificuldade), marcado com [TABELA]...[/TABELA], na posição em que
+    aparece no documento.
 
     Esse texto marcado é o que vai para a IA — ele preserva os mesmos
     sinais visuais que suas heurísticas originais usam para achar a
@@ -183,47 +218,52 @@ def extrair_texto_marcado(docx_path: str) -> str:
     doc = Document(docx_path)
     linhas = []
 
-    for paragrafo in doc.paragraphs:
-        texto = paragrafo.text.strip()
-        marcadores_imagem = extrair_imagens_do_paragrafo(paragrafo, doc)
+    for bloco in _iter_blocos_documento(doc):
+        if isinstance(bloco, Paragraph):
+            paragrafo = bloco
+            texto = paragrafo.text.strip()
+            marcadores_imagem = extrair_imagens_do_paragrafo(paragrafo, doc)
 
-        if not texto and not marcadores_imagem:
-            continue
+            if not texto and not marcadores_imagem:
+                continue
 
-        if texto:
-            partes = []
-            for run in paragrafo.runs:
-                trecho = run.text
-                if not trecho.strip():
-                    partes.append(trecho)
-                    continue
+            if texto:
+                partes = []
+                for run in paragrafo.runs:
+                    trecho = run.text
+                    if not trecho.strip():
+                        partes.append(trecho)
+                        continue
 
-                abre, fecha = "", ""
-                if run_vermelho(run):
-                    abre, fecha = abre + "[VERMELHO]", "[/VERMELHO]" + fecha
-                if run_amarelo(run):
-                    abre, fecha = abre + "[MARCADO]", "[/MARCADO]" + fecha
-                if run_negrito(run):
-                    abre, fecha = abre + "[NEGRITO]", "[/NEGRITO]" + fecha
+                    abre, fecha = "", ""
+                    if run_vermelho(run):
+                        abre, fecha = abre + "[VERMELHO]", "[/VERMELHO]" + fecha
+                    if run_amarelo(run):
+                        abre, fecha = abre + "[MARCADO]", "[/MARCADO]" + fecha
+                    if run_negrito(run):
+                        abre, fecha = abre + "[NEGRITO]", "[/NEGRITO]" + fecha
 
-                partes.append(f"{abre}{trecho}{fecha}")
+                    partes.append(f"{abre}{trecho}{fecha}")
 
-            linha_texto = "".join(partes).strip() or texto
+                linha_texto = "".join(partes).strip() or texto
 
-            # Numeração automática do Word (sem dígito visível no texto):
-            # marca o nível pra a IA usar como pista estrutural extra.
-            _, ilvl = obter_info_lista_word(paragrafo)
-            if ilvl == 0:
-                linha_texto = f"[ITEM_LISTA_NIVEL0] {linha_texto}"
-            elif ilvl == 1:
-                linha_texto = f"[ITEM_LISTA_NIVEL1] {linha_texto}"
+                # Numeração automática do Word (sem dígito visível no texto):
+                # marca o nível pra a IA usar como pista estrutural extra.
+                _, ilvl = obter_info_lista_word(paragrafo)
+                if ilvl == 0:
+                    linha_texto = f"[ITEM_LISTA_NIVEL0] {linha_texto}"
+                elif ilvl == 1:
+                    linha_texto = f"[ITEM_LISTA_NIVEL1] {linha_texto}"
 
-            linhas.append(linha_texto)
+                linhas.append(linha_texto)
 
-        # Marcador entra em linha própria, logo após o texto do parágrafo —
-        # é assim que o script original também posiciona a imagem.
-        for marcador in marcadores_imagem:
-            linhas.append(marcador)
+            # Marcador entra em linha própria, logo após o texto do
+            # parágrafo — mesma posição que o script original usa.
+            for marcador in marcadores_imagem:
+                linhas.append(marcador)
+        else:
+            # É uma tabela.
+            linhas.append(_texto_tabela_marcado(bloco))
 
     return "\n".join(linhas)
 
@@ -294,8 +334,11 @@ Catálogo de padrões já observados neste tipo de documento (use como
 referência, não como lista fechada):
 - Cabeçalhos de SEÇÃO, não são questões: "Unidade 3", "Unidade III",
   "Bloco 2", "Assunto: ...", "Fórum 1", "Questionário 2",
-  "QUESTIONÁRIO DAS UNIDADES". Ignore-os como conteúdo de questão, mas eles
-  ajudam a saber que uma nova questão está prestes a começar.
+  "QUESTIONÁRIO DAS UNIDADES". Não viram conteúdo de questão, mas quando
+  for "Unidade N" ou "Bloco N" (ou variação, tipo "Unidade 01 —
+  descrição"), use isso para preencher o campo "unidade" (ver abaixo) de
+  toda questão que aparecer depois desse cabeçalho, até aparecer outro
+  cabeçalho de unidade diferente.
 - Frases-gatilho que indicam um enunciado real de questão objetiva (ajudam
   a diferenciar de um subtítulo temático curto, tipo "1. Conceito de
   psicomotricidade", que NÃO é questão): "assinale a alternativa...",
@@ -369,6 +412,36 @@ qual é a "correta"; (3) copiar o texto após o traço para o campo
 esteja dezenas de parágrafos depois da questão no documento — não ignore
 essa seção só porque está longe.
 
+Padrão importante — TABELAS: quando aparecer um bloco [TABELA]...[/TABELA],
+é uma tabela do Word representada linha a linha, colunas separadas por
+" | ". A primeira linha costuma ser o cabeçalho das colunas (ex:
+"Questão | Resposta | Dificuldade | Conteúdo"). Uma tabela assim pode
+funcionar como um gabarito-resumo: cada linha seguinte corresponde a uma
+questão pelo número, e as colunas trazem informações daquela questão
+(resposta correta, dificuldade, tema). Use o número da linha da tabela
+para casar com a questão correspondente (mesma lógica do gabarito
+comentado em lista, mas em formato de tabela).
+
+Unidade do conteúdo: quando o documento tiver um cabeçalho "Unidade N" ou
+"Bloco N" (ver catálogo acima), preencha "unidade" com um valor curto e
+normalizado, tipo "Unidade 1", "Unidade 3" (converta romano pra arábico:
+"Unidade III" vira "Unidade 3"). Um documento pode ter mais de uma unidade
+dentro dele (várias seções) — nesse caso cada questão leva a unidade do
+cabeçalho mais próximo ACIMA dela. Se o documento inteiro não tiver
+nenhum cabeçalho desse tipo, deixe "unidade" como string vazia.
+
+Dificuldade da questão: procure, no texto da questão ou numa tabela como
+a descrita acima, alguma indicação explícita do nível de dificuldade —
+rótulos como "Dificuldade: Fácil", "Nível: Médio", "Grau de dificuldade:
+Difícil", ou uma coluna de tabela chamada "Dificuldade"/"Nível". Só
+preencha o campo "dificuldade" quando isso estiver EXPLÍCITO no
+documento — não tente adivinhar ou julgar a dificuldade pelo conteúdo da
+questão. Normalize o valor para exatamente um destes três: "Fácil",
+"Média" (isso inclui variações como "média", "intermediária",
+"intermediário", "médio") ou "Difícil". Se não houver nenhuma indicação
+explícita de dificuldade em lugar nenhum do documento para aquela
+questão, deixe "dificuldade" como string vazia.
+
 Para cada questão, extraia:
 
 - "titulo": use o cabeçalho da questão POR INTEIRO, exatamente como está no
@@ -377,6 +450,8 @@ Para cada questão, extraia:
   "Questão 3". Só use o genérico "Questão N" quando não houver NENHUM texto
   descritivo depois do número no cabeçalho.
 - "tipo": "Objetiva" (múltipla escolha) ou "Discursiva" (sem alternativas)
+- "unidade": "Unidade N" ou "" (vazio) — ver regra acima
+- "dificuldade": "Fácil", "Média", "Difícil" ou "" (vazio) — ver regra acima
 - "enunciado": o texto da pergunta, SEM marcadores de formatação e SEM as alternativas
 - "correta": texto da alternativa correta, sem marcadores (vazio se Discursiva)
 - "incorretas": lista com o texto das demais alternativas, sem marcadores (vazio se Discursiva)
@@ -413,6 +488,8 @@ SCHEMA_RESPOSTA = {
         "properties": {
             "titulo": {"type": "STRING"},
             "tipo": {"type": "STRING", "enum": ["Objetiva", "Discursiva"]},
+            "unidade": {"type": "STRING"},
+            "dificuldade": {"type": "STRING"},
             "enunciado": {"type": "STRING"},
             "correta": {"type": "STRING"},
             "incorretas": {"type": "ARRAY", "items": {"type": "STRING"}},
@@ -420,8 +497,8 @@ SCHEMA_RESPOSTA = {
             "tem_codigo_ou_calculo": {"type": "BOOLEAN"},
         },
         "required": [
-            "titulo", "tipo", "enunciado", "correta", "incorretas",
-            "justificativa", "tem_codigo_ou_calculo",
+            "titulo", "tipo", "unidade", "dificuldade", "enunciado", "correta",
+            "incorretas", "justificativa", "tem_codigo_ou_calculo",
         ],
     },
 }
@@ -502,47 +579,24 @@ def extrair_questoes_via_ia(
     for q in questoes:
         q["modo"] = "extraido_via_ia"
         q["qtd_alternativas"] = (1 + len(q.get("incorretas", []))) if q["tipo"] == "Objetiva" else 0
-        # Tags: tipo já veio da IA (Objetiva/Discursiva); disciplina vem do
-        # parâmetro. Calculadas aqui, não pela IA, pelo mesmo motivo de
-        # sempre: são fatos que já temos com certeza, não algo a "adivinhar".
+        # Tags: tipo, unidade e dificuldade já vieram da IA; disciplina vem
+        # do parâmetro. Disciplina/tipo calculados aqui, não pela IA, pelo
+        # mesmo motivo de sempre: já temos certeza deles. Unidade e
+        # dificuldade são opcionais — só entram na tag quando a IA achou
+        # indicação explícita no documento (campo não vazio).
         q["tags"] = [disciplina, q["tipo"]]
+        if q.get("unidade"):
+            q["tags"].append(q["unidade"])
+        if q.get("dificuldade"):
+            q["tags"].append(q["dificuldade"])
         # tem_codigo_ou_calculo: usa o julgamento da IA (que entende o
         # conteúdo) OU a checagem por regex (rede de segurança) — se
-        # qualquer um dos dois disser que sim, vale sim.
+        # qualquer um dos dois disser que sim, vale sim. Não decide mais
+        # formato de arquivo (só existe XML agora), mas fica como metadado
+        # útil — pode virar tag no futuro se quiser filtrar por isso.
         q["tem_codigo_ou_calculo"] = bool(q.get("tem_codigo_ou_calculo")) or _contem_codigo_ou_calculo_regex(q)
 
     return questoes
-
-
-def definir_formato_arquivo(questoes: list[dict]) -> str:
-    """
-    Decide o formato do ARQUIVO INTEIRO (não por questão individual).
-
-    Regra: o arquivo inteiro sai em XML se QUALQUER questão do lote tiver:
-    (a) sobrado algum marcador __MOODLE_IMAGE_...__ em algum campo de
-        texto (a questão tem imagem); OU
-    (b) o campo "tem_codigo_ou_calculo" marcado true (código de
-        programação ou fórmula/cálculo em algum campo) — o GIFT escapa
-        caracteres como { } = ~ # :, o que corromperia código e fórmulas;
-        o XML não tem esse problema, então é a escolha mais segura.
-    Só quando NENHUMA questão do lote cair em (a) ou (b), o arquivo sai em
-    GIFT (texto puro, mais simples).
-
-    O sinal de imagem é calculado por string (determinístico); o sinal de
-    código/cálculo já vem combinado (IA + regex) do passo de extração.
-    """
-    for questao in questoes:
-        if questao.get("tem_codigo_ou_calculo"):
-            return "xml"
-        campos = [
-            questao.get("enunciado", ""),
-            questao.get("correta", ""),
-            " ".join(questao.get("incorretas", [])),
-            questao.get("justificativa", ""),
-        ]
-        if "__MOODLE_IMAGE_" in " ".join(campos):
-            return "xml"
-    return "gift"
 
 
 # =========================
