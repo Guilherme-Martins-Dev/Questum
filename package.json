@@ -1,0 +1,14 @@
+{
+  "name": "questum",
+  "private": true,
+  "scripts": {
+    "dev:web": "pnpm --filter @questum/web dev",
+    "dev:api": "pnpm --filter @questum/api dev",
+    "db:generate": "pnpm --filter @questum/api db:generate",
+    "db:migrate": "pnpm --filter @questum/api db:migrate"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  },
+  "packageManager": "pnpm@9.0.0"
+}

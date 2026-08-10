@@ -533,6 +533,50 @@ def _contem_codigo_ou_calculo_regex(questao: dict) -> bool:
 # =========================
 # 3) CHAMADA À API (Gemini)
 # =========================
+_PADRAO_UNIDADE_NO_NOME = re.compile(r"\bUNI(?:DADE)?[\s_.\-]*0*([0-9]+)", re.IGNORECASE)
+
+
+def extrair_unidade_do_nome_arquivo(caminho) -> str:
+    """
+    Fallback: tenta achar "Unidade N" no NOME do arquivo, pra usar quando o
+    conteúdo do .docx não traz essa informação. Reconhece variações como
+    "UNI 02", "UNIDADE 02", "UNI02", "Unidade_4" (case-insensitive, zeros à
+    esquerda ignorados). Devolve "" se não encontrar nada reconhecível.
+    """
+    encontrado = _PADRAO_UNIDADE_NO_NOME.search(caminho.stem)
+    if not encontrado:
+        return ""
+    numero = int(encontrado.group(1))
+    return f"Unidade {numero}"
+
+
+def processar_arquivo(caminho, disciplina: str, log=print) -> list[dict]:
+    """
+    Lê um .docx, extrai as questões via IA e devolve a lista de dicts.
+    Função de biblioteca — usada tanto pelo main.py (CLI, gera XML) quanto
+    pelo extrair_json.py (chamado via child_process pelo backend Node).
+    'log' recebe cada mensagem de progresso; por padrão usa print(), mas
+    quem chamar pode passar uma função que escreve em stderr, por exemplo.
+    """
+    log(f"  Lendo {caminho.name}...")
+    texto_marcado = extrair_texto_marcado(str(caminho))
+
+    log("  Extraindo questões via IA (Gemini)...")
+    questoes = extrair_questoes_via_ia(texto_marcado, disciplina=disciplina)
+
+    # Fallback de unidade: só entra em ação se a IA não achou nada no
+    # conteúdo do documento (campo "unidade" vazio) para aquela questão.
+    unidade_do_nome = extrair_unidade_do_nome_arquivo(caminho)
+    if unidade_do_nome:
+        for questao in questoes:
+            if not questao.get("unidade"):
+                questao["unidade"] = unidade_do_nome
+                questao["tags"].append(unidade_do_nome)
+
+    log(f"  {len(questoes)} questão(ões) extraída(s) de {caminho.name}.")
+    return questoes
+
+
 def extrair_questoes_via_ia(
     texto_marcado: str,
     disciplina: str,
