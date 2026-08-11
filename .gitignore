@@ -1,7 +1,31 @@
+# Dependências e builds
 node_modules/
 dist/
+build/
+
+# Ambiente / chaves de API
 .env
 .env.local
+.env.*.local
+
+# Logs
 *.log
+
+# Python
 __pycache__/
 *.pyc
+.venv/
+venv/
+
+# Arquivos de teste da instituição (provas/questões) — não versionar
+*.doc
+*.docx
+*.xml
+*.gift
+*.txt
+
+# Exceções às regras acima: arquivos de texto que são parte do projeto,
+# não material de prova
+!requirements.txt
+!README.txt
+!CHANGELOG.txt
