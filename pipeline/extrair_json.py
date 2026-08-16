@@ -27,6 +27,15 @@ import json
 import sys
 from pathlib import Path
 
+# No Windows, stdout/stderr por padrão usam a codificação do console
+# (cp1252), que não sabe representar vários caracteres comuns em provas
+# (≈, ≤, √, etc.) — isso quebra o print() do JSON final com
+# UnicodeEncodeError. Reconfigurar para UTF-8 aqui resolve isso
+# independente de como o script for chamado (direto no terminal ou via
+# child_process do Node).
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
+
 from extracao_ia_gemini import IMAGENS_EXTRAIDAS, processar_arquivo
 
 
@@ -52,7 +61,14 @@ def main() -> None:
         todas_questoes: list[dict] = []
         for i, caminho in enumerate(caminhos, start=1):
             log(f"[{i}/{len(caminhos)}] {caminho.name}")
-            todas_questoes.extend(processar_arquivo(caminho, disciplina, log=log))
+            questoes_do_arquivo = processar_arquivo(caminho, disciplina, log=log)
+            # Sem isso, o Node não tem como saber de qual arquivo cada
+            # questão veio quando a extração cobre mais de um .docx de
+            # uma vez — e sem essa informação, a rota de persistência
+            # acaba associando as questões ao arquivo errado.
+            for questao in questoes_do_arquivo:
+                questao["arquivo_origem"] = caminho.name
+            todas_questoes.extend(questoes_do_arquivo)
 
         log(f"[INFO] {len(IMAGENS_EXTRAIDAS)} imagem(ns) encontrada(s) no total.")
         log(f"[INFO] {len(todas_questoes)} questão(ões) no total, de {len(caminhos)} arquivo(s).")

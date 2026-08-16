@@ -19,6 +19,11 @@ import argparse
 import sys
 from pathlib import Path
 
+# Mesma correção do extrair_json.py: evita UnicodeEncodeError no Windows
+# quando alguma questão tem caractere que o console (cp1252) não representa.
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
+
 from extracao_ia_gemini import (
     IMAGENS_EXTRAIDAS,
     processar_arquivo,
