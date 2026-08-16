@@ -26,6 +26,8 @@ export interface QuestaoExtraida {
   tem_codigo_ou_calculo: boolean;
   qtd_alternativas: number;
   tags: string[];
+  /** Nome do arquivo .docx de origem — usado pra associar a questão ao arquivo certo quando a extração cobre múltiplos arquivos. */
+  arquivo_origem: string;
 }
 
 /** Resultado bruto do extrair_json.py (o que o child_process devolve). */
@@ -55,4 +57,27 @@ export interface Alternativa {
   texto: string;
   correta: boolean;
   ordem: number;
+}
+
+/** Imagem já persistida e associada a uma questão (formato do banco, diferente de ImagemExtraida). */
+export interface ImagemQuestao {
+  id: string;
+  questaoId: string;
+  nome: string;
+  marcador: string;
+  contentType: string;
+  dadosBase64: string;
+}
+
+/** Questão com relações resolvidas — formato devolvido por GET /questoes. */
+export interface QuestaoComRelacoes extends Questao {
+  unidadeNome: string | null;
+  disciplinaNome: string;
+  alternativas: Alternativa[];
+  imagens: ImagemQuestao[];
+}
+
+export interface Disciplina {
+  id: string;
+  nome: string;
 }

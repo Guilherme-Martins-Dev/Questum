@@ -8,6 +8,20 @@
       "when": 1786312670574,
       "tag": "0000_amazing_alex_power",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786840871587,
+      "tag": "0001_new_ronan",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786842797240,
+      "tag": "0002_clear_charles_xavier",
+      "breakpoints": true
     }
   ]
 }

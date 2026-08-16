@@ -10,7 +10,7 @@ import {
 import { relations } from "drizzle-orm";
 
 export const tipoQuestaoEnum = pgEnum("tipo_questao", ["Objetiva", "Discursiva"]);
-export const dificuldadeEnum = pgEnum("dificuldade", ["Facil", "Media", "Dificil"]);
+export const dificuldadeEnum = pgEnum("dificuldade", ["Fácil", "Média", "Difícil"]);
 export const statusArquivoEnum = pgEnum("status_arquivo", [
   "pendente",
   "extraindo",

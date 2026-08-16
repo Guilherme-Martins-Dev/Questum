@@ -21,7 +21,15 @@ export async function executarExtracao(
 
   return new Promise((resolve, reject) => {
     const processo = spawn(PYTHON_BIN, [scriptPath, disciplina, ...caminhosArquivos], {
-      env: process.env,
+      env: {
+        ...process.env,
+        // Sem isso, o Windows usa a codificação do console (cp1252) pra
+        // stdout/stderr do processo filho, que não sabe representar
+        // caracteres como "≈" — o Python quebra com UnicodeEncodeError na
+        // hora de imprimir o JSON. Forçar UTF-8 aqui resolve isso e
+        // também os "�" que apareciam nos logs de progresso.
+        PYTHONIOENCODING: "utf-8",
+      },
     });
 
     let stdout = "";

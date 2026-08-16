@@ -1,0 +1,114 @@
+import type { FastifyInstance } from "fastify";
+import { eq, inArray } from "drizzle-orm";
+import { editarQuestaoSchema } from "@questum/shared";
+import { db } from "../db/client";
+import { questoes, unidades, arquivos, disciplinas, alternativas, imagens } from "../db/schema";
+
+/**
+ * GET /disciplinas — lista as disciplinas já processadas, pra preencher o
+ * seletor da tela de revisão.
+ *
+ * GET /questoes?disciplinaId=... — lista as questões de uma disciplina,
+ * já com unidade e disciplina resolvidas por nome e as alternativas
+ * agrupadas por questão (evita N+1: uma query pras questões, uma query
+ * pra todas as alternativas de uma vez, junta em memória).
+ */
+export async function questionsRoutes(app: FastifyInstance) {
+  app.get("/disciplinas", async () => {
+    return db.select().from(disciplinas).orderBy(disciplinas.nome);
+  });
+
+  app.get<{ Querystring: { disciplinaId?: string } }>("/questoes", async (request, reply) => {
+    const { disciplinaId } = request.query;
+    if (!disciplinaId) {
+      return reply.status(400).send({ erro: "Informe disciplinaId na query string." });
+    }
+
+    const linhas = await db
+      .select({
+        id: questoes.id,
+        arquivoId: questoes.arquivoId,
+        disciplinaId: arquivos.disciplinaId,
+        unidadeId: questoes.unidadeId,
+        titulo: questoes.titulo,
+        tipo: questoes.tipo,
+        dificuldade: questoes.dificuldade,
+        enunciado: questoes.enunciado,
+        justificativa: questoes.justificativa,
+        temCodigoOuCalculo: questoes.temCodigoOuCalculo,
+        criadoEm: questoes.criadoEm,
+        unidadeNome: unidades.nome,
+        disciplinaNome: disciplinas.nome,
+      })
+      .from(questoes)
+      .innerJoin(arquivos, eq(questoes.arquivoId, arquivos.id))
+      .innerJoin(disciplinas, eq(arquivos.disciplinaId, disciplinas.id))
+      .leftJoin(unidades, eq(questoes.unidadeId, unidades.id))
+      .where(eq(arquivos.disciplinaId, disciplinaId))
+      // Sem isso, o Postgres não garante nenhuma ordem específica.
+      // Ordenar por título (texto) criaria um bug diferente: "Questão 10"
+      // viria antes de "Questão 9" (comparação de string, não numérica).
+      // criadoEm reflete a ordem real em que a extração inseriu as
+      // questões.
+      .orderBy(questoes.criadoEm);
+
+    const idsQuestoes = linhas.map((linha) => linha.id);
+    const todasAlternativas = idsQuestoes.length
+      ? await db.select().from(alternativas).where(inArray(alternativas.questaoId, idsQuestoes))
+      : [];
+
+    const alternativasPorQuestao = new Map<string, typeof todasAlternativas>();
+    for (const alternativa of todasAlternativas) {
+      const lista = alternativasPorQuestao.get(alternativa.questaoId) ?? [];
+      lista.push(alternativa);
+      alternativasPorQuestao.set(alternativa.questaoId, lista);
+    }
+
+    const todasImagens = idsQuestoes.length
+      ? await db.select().from(imagens).where(inArray(imagens.questaoId, idsQuestoes))
+      : [];
+
+    const imagensPorQuestao = new Map<string, typeof todasImagens>();
+    for (const imagem of todasImagens) {
+      const lista = imagensPorQuestao.get(imagem.questaoId) ?? [];
+      lista.push(imagem);
+      imagensPorQuestao.set(imagem.questaoId, lista);
+    }
+
+    return linhas.map((linha) => ({
+      ...linha,
+      alternativas: (alternativasPorQuestao.get(linha.id) ?? []).sort((a, b) => a.ordem - b.ordem),
+      imagens: imagensPorQuestao.get(linha.id) ?? [],
+    }));
+  });
+
+  /**
+   * PATCH /questoes/:id — salva a edição feita na tela de revisão. Usa o
+   * MESMO schema Zod (editarQuestaoSchema) que o formulário do frontend,
+   * então as duas pontas validam exatamente as mesmas regras.
+   */
+  app.patch<{ Params: { id: string } }>("/questoes/:id", async (request, reply) => {
+    const corpo = editarQuestaoSchema.safeParse(request.body);
+    if (!corpo.success) {
+      return reply.status(400).send({ erro: corpo.error.flatten() });
+    }
+
+    const [atualizada] = await db
+      .update(questoes)
+      .set({
+        titulo: corpo.data.titulo,
+        enunciado: corpo.data.enunciado,
+        dificuldade: corpo.data.dificuldade || null,
+        justificativa: corpo.data.justificativa,
+        atualizadoEm: new Date(),
+      })
+      .where(eq(questoes.id, request.params.id))
+      .returning();
+
+    if (!atualizada) {
+      return reply.status(404).send({ erro: "Questão não encontrada." });
+    }
+
+    return atualizada;
+  });
+}
