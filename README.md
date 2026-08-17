@@ -73,9 +73,10 @@ Upload (.docx, um ou mais arquivos) → extração via IA (Gemini) → persistê
 - [x] Botão de exportar XML na tela de revisão
 - [x] Navegação automática pra revisão após a extração, com invalidação de cache
 - [x] `upload-page.tsx` removida — upload passou a viver dentro do formulário de extração, não é mais uma etapa separada
+- [x] Correção: edição de dificuldade na tela de revisão (rota `PATCH /questoes/:id` sem tratamento de erro escondia a causa real de falhas do banco)
+- [x] XML gerado validado importando num Moodle de teste real
 
 ### Pendente
 - [ ] `npx shadcn init` de verdade (os componentes atuais foram escritos à mão)
 - [ ] Testes automatizados
 - [ ] Avaliar outras IAs além do Gemini (OpenAI, Claude) para a extração
-- [ ] Validar o XML gerado importando num Moodle de teste de verdade (só testamos a geração, não o consumo)

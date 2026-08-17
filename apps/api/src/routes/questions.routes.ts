@@ -93,22 +93,30 @@ export async function questionsRoutes(app: FastifyInstance) {
       return reply.status(400).send({ erro: corpo.error.flatten() });
     }
 
-    const [atualizada] = await db
-      .update(questoes)
-      .set({
-        titulo: corpo.data.titulo,
-        enunciado: corpo.data.enunciado,
-        dificuldade: corpo.data.dificuldade || null,
-        justificativa: corpo.data.justificativa,
-        atualizadoEm: new Date(),
-      })
-      .where(eq(questoes.id, request.params.id))
-      .returning();
+    try {
+      const [atualizada] = await db
+        .update(questoes)
+        .set({
+          titulo: corpo.data.titulo,
+          enunciado: corpo.data.enunciado,
+          dificuldade: corpo.data.dificuldade || null,
+          justificativa: corpo.data.justificativa,
+          atualizadoEm: new Date(),
+        })
+        .where(eq(questoes.id, request.params.id))
+        .returning();
 
-    if (!atualizada) {
-      return reply.status(404).send({ erro: "Questão não encontrada." });
+      if (!atualizada) {
+        return reply.status(404).send({ erro: "Questão não encontrada." });
+      }
+
+      return atualizada;
+    } catch (erro) {
+      // Sem isso, um erro do Postgres (ex: valor de enum inválido) vira
+      // um 500 genérico sem explicação — aqui a mensagem real do banco
+      // chega até o toast de erro no frontend.
+      request.log.error(erro);
+      return reply.status(502).send({ erro: (erro as Error).message });
     }
-
-    return atualizada;
   });
 }
