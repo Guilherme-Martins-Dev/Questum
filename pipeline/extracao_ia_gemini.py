@@ -272,213 +272,49 @@ def extrair_texto_marcado(docx_path: str) -> str:
 # 2) PROMPT + SCHEMA DE SAÍDA
 # =========================
 INSTRUCAO_SISTEMA = """
-Você recebe o texto extraído de uma prova em Word. O texto pode conter
-marcadores de formatação original: [VERMELHO]...[/VERMELHO],
-[MARCADO]...[/MARCADO] (destaque amarelo) e [NEGRITO]...[/NEGRITO]. Esses
-marcadores costumam indicar a alternativa correta — mas nem sempre. Use
-também o contexto (ex: um gabarito escrito ao final do texto, tipo
-"Resposta: C" ou "Alternativa correta: B").
+Você recebe o texto extraído de uma prova em Word. Provas vêm de professores/conteudistas diferentes, cada um formatando do seu jeito — não existe um padrão único. Use o SENTIDO do texto pra decidir onde uma questão começa e termina, mesmo que a formatação mude no meio do mesmo documento.
 
-O texto também pode conter marcadores de imagem no formato exato
-__MOODLE_IMAGE_<código>__ (ex: __MOODLE_IMAGE_A1B2C3D4E5F6A7B8__). Cada um
-representa uma imagem que estava naquela posição do documento original.
-Regras para esses marcadores:
-- Copie o marcador EXATAMENTE como aparece (mesmos caracteres, mesmo
-  código), sem alterar, sem inventar, sem descrever a imagem.
-- Preserve a posição relativa dele: se a imagem aparecia dentro do
-  enunciado, o marcador vai no campo "enunciado"; se aparecia dentro de
-  uma alternativa, vai no texto dessa alternativa; se aparecia depois do
-  comentário, vai em "justificativa".
-- Nunca remova um marcador de imagem nem o mova para um campo diferente
-  de onde ele estava no texto original.
+MARCADORES NO TEXTO (como interpretar a entrada):
+- [VERMELHO]...[/VERMELHO], [MARCADO]...[/MARCADO] (destaque amarelo), [NEGRITO]...[/NEGRITO]: formatação original do Word. Frequentemente indicam a alternativa correta, mas cruze sempre com o contexto (ex: um gabarito escrito no texto, tipo "Resposta: C"). [VERMELHO] cobre qualquer tom de vermelho (990000, CC0000, FF0000...), não só o puro.
+- __MOODLE_IMAGE_<código>__ (ex: __MOODLE_IMAGE_A1B2C3D4E5F6A7B8__): posição exata de uma imagem. Copie EXATAMENTE como está, no campo onde ela aparece no texto original (enunciado, alternativa ou justificativa) — nunca altere, descreva, remova ou mova pra outro campo.
+- [ITEM_LISTA_NIVEL0] / [ITEM_LISTA_NIVEL1]: numeração automática do Word, sem dígito visível no texto. Nível 0 sugere item principal (nova questão); nível 1 sugere subitem (alternativa). É pista estrutural, não garantia — um título de seção também pode estar no nível 0.
+- [TABELA]...[/TABELA]: tabela do Word, uma linha por linha do documento, colunas separadas por " | " (primeira linha costuma ser cabeçalho). Pode funcionar como gabarito-resumo (colunas tipo Questão/Resposta/Dificuldade/Unidade) — use o número da linha pra casar com a questão correspondente (mesma lógica do gabarito comentado, ver abaixo).
+Remova todos esses marcadores do resultado final (exceto o de imagem, que deve permanecer) — nenhum deve aparecer no texto extraído.
 
-Sua tarefa: identificar cada questão do texto e devolver uma lista
-estruturada. IMPORTANTE sobre a identificação: este texto vem de provas
-feitas por professores/conteudistas diferentes, e cada um formata do seu
-jeito — não existe um padrão único. Você pode encontrar, por exemplo:
-numeração "1.", "01)", "Questão 1", "QUESTÃO 01", títulos em negrito,
-enunciados sem nenhuma numeração (só separados por parágrafo em branco),
-alternativas com "a)", "A)", "I.", "-", ou letras entre parênteses, gabarito
-disperso ao final do documento em vez de logo após a questão, blocos com ou
-sem justificativa. Não assuma um formato fixo: use o SENTIDO do texto (uma
-pergunta seguida de um conjunto de opções de resposta = uma questão) para
-decidir onde uma questão termina e a próxima começa, mesmo que a
-numeração/formatação mude no meio do mesmo documento.
+IDENTIFICANDO CADA QUESTÃO:
+Formatos variam bastante: "1.", "01)", "Questão 1", "QUESTÃO 01", título em negrito, ou sem numeração nenhuma (só parágrafo em branco separando). Alternativas: "a)", "A)", "I.", "-", letra entre parênteses. Gabarito pode vir logo após a questão ou disperso ao final do documento.
 
-Cuidado com FALSO POSITIVO comum: uma linha curta tipo "1. Conceito de
-psicomotricidade" ou "2. Introdução à ética" é um SUBTÍTULO TEMÁTICO (título
-de seção/tema), não uma questão — mesmo tendo numeração parecida com uma
-questão. Sinais de que é subtítulo, não questão: é curto (até ~12
-palavras), não termina em ":" nem "?", e não contém palavra de comando
-típica de enunciado ("assinale", "marque", "identifique", "indique",
-"avalie", "considere", "qual", "quais", "corresponde a", "refere-se a").
-Trate esses subtítulos como contexto/seção, não como questão nem como
-conteúdo de nenhuma questão.
+Falsos positivos comuns:
+- Subtítulo temático de seção ("1. Conceito de psicomotricidade"): curto (até ~12 palavras), não termina em ":" nem "?", sem verbo de comando ("assinale", "marque", "identifique", "avalie", "qual", "corresponde a") — é cabeçalho, não questão.
+- Sigla parecendo numeral romano de subitem ("MDIC -", "CIF -", "ONU -"): só conta como romano de verdade se decodificar pra um valor pequeno e plausível (1 a ~20).
+- Cabeçalhos "Unidade N"/"Bloco N"/"Módulo N"/"Capítulo N"/"Tema N"/"Semana N"/"Assunto: ..."/"Fórum N"/"Questionário N": nunca são questão — servem só pra preencher o campo "unidade" (ver regras de campo abaixo).
+- Subitens dentro da MESMA questão (não são alternativas nem questão nova): "I – ...", "II – ...", letras soltas "A – ...", marcadores V/F "( ) ...", sequências "V, F, V".
 
-Cuidado também para não confundir uma SIGLA com um numeral romano de
-subitem: "MDIC -", "CIF -", "ONU -" não são subitens internos "I -", "II
--" — são siglas seguidas de explicação. Um numeral romano de subitem só
-faz sentido como tal se decodificar para um valor pequeno e plausível de
-enumeração (1 a ~20); fora isso, é sigla ou outra coisa, não subitem.
+Fronteira da justificativa sem rótulo explícito: rótulos como "Justificativa:", "Comentário:", "Feedback:" ajudam, mas nem todo documento os usa. Sem rótulo, decida pela POSIÇÃO — qualquer conteúdo (texto, imagem, lista, tabela) entre o fim das alternativas de uma questão e o PRÓXIMO sinal inequívoco de nova questão pertence à justificativa da questão ANTERIOR, nunca ao enunciado da seguinte. Na dúvida entre "ainda é da questão de trás" ou "já é da da frente", prefira manter na de trás.
 
-Marcadores de lista automática do Word: quando um parágrafo começa com
-[ITEM_LISTA_NIVEL0], significa que o Word tinha uma numeração automática
-ali (que não aparece como dígito no texto) e o nível sugere item principal
-— normalmente uma questão nova. [ITEM_LISTA_NIVEL1] é o nível seguinte —
-normalmente uma alternativa dessa questão. Use isso como pista estrutural
-adicional, junto com o sentido do texto (não é garantia absoluta: um título
-de seção também pode estar no nível 0). Remova esses marcadores do
-resultado final, eles não fazem parte do conteúdo da questão.
+Afirmativas sem numeração visível + alternativas de combinação: às vezes frases/parágrafos soltos (sem "I."/"II." escrito) vêm um atrás do outro, seguidos de opções de resposta curtas que são combinações deles, tipo "I e II", "II e III", "I, II e III". Nesse padrão, as frases longas são AFIRMATIVAS e ficam no campo "enunciado" (na ordem, numere I/II/III você mesmo se ajudar) — NUNCA em "correta"/"incorretas". Só as combinações curtas finais são alternativas de resposta de verdade. Esse é o erro mais comum nesse tipo de documento: misturar as afirmativas longas na lista de alternativas junto com as combinações.
 
-Catálogo de padrões já observados neste tipo de documento (use como
-referência, não como lista fechada):
-- Cabeçalhos de SEÇÃO, não são questões: "Unidade 3", "Unidade III",
-  "Bloco 2", "Assunto: ...", "Fórum 1", "Questionário 2",
-  "QUESTIONÁRIO DAS UNIDADES". Não viram conteúdo de questão, mas quando
-  for "Unidade N" ou "Bloco N" (ou variação, tipo "Unidade 01 —
-  descrição"), use isso para preencher o campo "unidade" (ver abaixo) de
-  toda questão que aparecer depois desse cabeçalho, até aparecer outro
-  cabeçalho de unidade diferente.
-- Frases-gatilho que indicam um enunciado real de questão objetiva (ajudam
-  a diferenciar de um subtítulo temático curto, tipo "1. Conceito de
-  psicomotricidade", que NÃO é questão): "assinale a alternativa...",
-  "marque a opção...", "é correto afirmar...", "avalie as afirmativas...",
-  "considerando o texto acima...", "qual das alternativas...".
-- Subitens dentro da MESMA questão (não são alternativas nem novas
-  questões) — comum em questões de "julgue as afirmativas": "I – ...",
-  "II – ...", letras maiúsculas soltas "A – ...", ou marcadores de V/F
-  "( ) ...". Sequências como "V, F, V" ou "V, V, F" também indicam
-  julgamento de afirmativas, não uma questão nova.
+GABARITO SEPARADO DAS QUESTÕES:
+Às vezes a resposta correta e a justificativa não ficam junto da questão — aparecem numa seção própria (cabeçalho "GABARITO", "GABARITO COMENTADO", "RESPOSTAS COMENTADAS") como uma lista curta ("1. C – texto da justificativa...", "2. B – ...") ou numa tabela [TABELA] com colunas equivalentes. Em qualquer um dos dois formatos: use o NÚMERO pra localizar a questão correspondente (mesma ordem de numeração usada no início do documento) e a LETRA pra escolher, entre as alternativas já listadas naquela questão, qual é a "correta" — mesmo que essa seção esteja muitos parágrafos distante da questão. Se a conclusão do gabarito/comentário não corresponder a NENHUMA alternativa listada, é sinal de inconsistência no documento original — não force nem invente correspondência; deixe "correta" vazio e devolva todas em "incorretas".
 
-Padrão importante — AFIRMATIVAS SEM NUMERAÇÃO VISÍVEL + alternativas de
-combinação: às vezes as afirmativas a serem julgadas NÃO têm nenhum "I."
-ou "II." escrito no texto — são só frases/parágrafos soltos, um atrás do
-outro, e só DEPOIS aparecem as alternativas de resposta, que são
-combinações curtas desses itens (pela posição: 1º parágrafo = I, 2º = II,
-3º = III...). Exemplo real:
-    (enunciado) Com relação a história... marque o item VERDADEIRO:
-    A ideia central de responsabilidade social... [seria a afirmativa I]
-    A responsabilidade social das empresas teve início... [afirmativa II]
-    Em 1970 a responsabilidade social... [afirmativa III]
-    Em 1979 a responsabilidade social... [afirmativa IV]
-    I e II
-    II e III
-    I, II e III
-    I, II, III e IV
-    COMENTÁRIO: ...
-Nesse padrão, as 4 frases longas (sem numeração visível) são AFIRMATIVAS,
-e ficam dentro do campo "enunciado" (mantenha-as na ordem, pode numerá-las
-I/II/III/IV você mesmo para ficar claro) — elas NUNCA vão para "correta"
-nem para "incorretas". Só as 4 frases curtas finais ("I e II", "II e III"
-etc.) são as alternativas de resposta de verdade. Esse é o erro mais comum
-nesse tipo de documento: colocar as afirmativas longas dentro da lista de
-alternativas por engano, junto com as combinações — não faça isso.
+CAMPOS DE CADA QUESTÃO:
+- "titulo": cabeçalho da questão POR INTEIRO, exatamente como está no texto (ex: "Questão 3 — Cardinalidade 1:N/N:N", não apenas "Questão 3"). Use o genérico "Questão N" só quando não houver nenhum texto descritivo depois do número.
+- "tipo": "Objetiva" (tem alternativas) ou "Discursiva" (não tem).
+- "unidade": preencha só se o documento tiver, em QUALQUER lugar (cabeçalho de seção, título geral do documento, ou coluna de uma tabela), algo como "Unidade N"/"Bloco N"/"Módulo N"/"Capítulo N"/"Tema N"/"Semana N". Normalize sempre para o formato "Unidade N" (romano vira arábico: "Unidade III" → "Unidade 3"; "Módulo 02" → "Unidade 2"). Documento com mais de uma unidade: cada questão leva a do cabeçalho mais próximo ACIMA dela. Nunca invente — string vazia se não houver indicação em lugar nenhum.
+- "dificuldade": preencha só com indicação EXPLÍCITA no documento ("Dificuldade: Fácil", "Nível: Médio", coluna de tabela "Dificuldade"/"Nível") — nunca julgue ou infira pelo conteúdo da questão. Normalize para exatamente "Fácil", "Média" (inclui "intermediária"/"intermediário"/"médio") ou "Difícil". String vazia se não houver indicação explícita.
+- "enunciado": o texto da pergunta, sem marcadores de formatação, sem as alternativas.
+- "correta" / "incorretas": texto de cada alternativa, sem marcadores de formatação. REMOVA qualquer prefixo de letra ou numeração da própria alternativa ("A)", "(A)", "a)", "B.", "1)", "I)") — o campo deve conter só o conteúdo da alternativa, nunca esse prefixo. O prefixo original (quando existir) ainda serve como pista pra decidir QUAL alternativa é a correta (junto com cor, gabarito etc.), mas não faz parte do texto final de nenhuma alternativa. Esses dois campos vêm de onde a questão lista as opções de resposta (o corpo da questão) — SEMPRE preencha os dois com o conteúdo de verdade das alternativas, independente do que acontecer no campo "justificativa" a seguir.
+- "justificativa": comentário/explicação da resposta, se existir no texto (senão string vazia). Um bloco tipo "Justificativa:"/"Justificativas:"/"Comentário:" que recapitula cada alternativa por letra, dizendo se é correta ou incorreta, é conteúdo de JUSTIFICATIVA. Nesse bloco, remova o prefixo de letra de CADA linha/item antes de juntar no campo — o prefixo é só a letra entre/seguida de parênteses ou ponto no início do item ("(A)", "(B)", "A)", "A.", "1)"), nunca o resto da frase. Exemplo exato de transformação, item por item:
+    Texto original:        "(A) Correta: equilíbrio entre atividades profissionais, descanso e vida pessoal favorece bem-estar e desempenho sustentável."
+    Vira no campo:          "Correta: equilíbrio entre atividades profissionais, descanso e vida pessoal favorece bem-estar e desempenho sustentável."
+  Ou seja, some SÓ o "(A) " do começo — o resto da frase (incluindo "Correta:"/"Incorreta:") permanece intacto, palavra por palavra. Faça essa mesma remoção em CADA item do bloco antes de montar o texto final de "justificativa" — não é opcional, e não deixe nenhum "(A)", "(B)", "(C)", "(D)" sobrando no resultado. IMPORTANTE: extrair esse bloco de justificativa NUNCA deve esvaziar ou substituir os campos "correta"/"incorretas" — são campos independentes um do outro. Se o documento tiver as alternativas curtas em um lugar (ex: logo após o enunciado) e depois um bloco de justificativa recapitulando cada uma com mais detalhe, preencha "correta"/"incorretas" com as alternativas curtas originais E "justificativa" com o texto explicativo (já sem os prefixos de letra) — nunca deixe "correta"/"incorretas" vazios só porque a justificativa também menciona as alternativas.
+- "tem_codigo_ou_calculo": true se QUALQUER campo desta questão (enunciado, correta, incorretas, justificativa) contiver (a) trecho de código de programação em qualquer linguagem — reconheça por chaves, ponto e vírgula, palavras-chave (def, class, function, SELECT, INSERT, void, public, import, #include, tags HTML) — ou (b) fórmula/equação/operação matemática — operadores, frações, raízes, somatórios, potências, qualquer cálculo que o aluno precise resolver. Números soltos em prosa comum (datas, percentuais, quantidades) não contam. Na dúvida real, marque true.
 
-- Gabarito/resposta correta, geralmente ao final da questão ou do
-  documento: "✅ Resposta correta: B", "Resposta Correta - C",
-  "Gabarito: D", "[Gabarito]: A". A letra indicada corresponde à
-  alternativa correspondente na ordem em que as alternativas foram
-  listadas (A = primeira, B = segunda, etc.).
-- Comentário/justificativa da resposta: "💡 Comentário: ...",
-  "Feedback: ...", "Justificativa: ...". Quando o comentário explicar
-  quais afirmativas são verdadeiras/falsas, use essa conclusão para
-  escolher, entre as alternativas de combinação já listadas, qual bate
-  exatamente com o conjunto de afirmativas verdadeiras. Se a conclusão do
-  comentário não corresponder a NENHUMA alternativa listada, é sinal de
-  inconsistência no documento original — não force nem invente uma
-  correspondência; nesse caso, prefira deixar "correta" vazio e devolver
-  todas as opções em "incorretas" a arriscar uma resposta errada.
-- [VERMELHO] pode aparecer em tons diferentes de vermelho (não é sempre o
-  mesmo vermelho "puro") — trate qualquer trecho marcado com [VERMELHO]
-  como candidato a resposta correta, independentemente do tom exato.
+REGRAS GERAIS:
+- Nunca invente conteúdo que não está no texto original.
+- Nunca invente valor pra um campo opcional (unidade, dificuldade, correta) só pra preencher — string vazia é sempre preferível a um palpite.
+- Seja consistente: a mesma entrada deve sempre produzir a mesma extração, sem variar redação ou estrutura entre execuções.
 
-Padrão importante — GABARITO COMENTADO EM BLOCO, separado das questões:
-às vezes as questões vêm todas primeiro, sem nenhuma marcação de resposta
-correta nelas, e só depois aparece uma seção própria (cabeçalho tipo
-"GABARITO", "GABARITO COMENTADO", "RESPOSTAS COMENTADAS") com uma lista
-curta assim:
-    1. C – O material caracteriza a prática escolar predominante da
-    Antiguidade ao século XIX como uma aprendizagem passivo-receptiva...
-    2. B – O material apresenta a publicação da Didactica Magna...
-Nesse padrão, cada linha começa com o NÚMERO da questão (correspondente à
-ordem/numeração das questões no início do documento — "1." corresponde à
-primeira questão, "Questão 1"), seguido de um traço, seguido do texto
-completo da justificativa. Quando encontrar esse padrão, você deve: (1)
-usar o número para localizar a questão correspondente (elas aparecem na
-mesma ordem em que foram numeradas no início do documento); (2) usar a
-letra para escolher, entre as alternativas já listadas naquela questão,
-qual é a "correta"; (3) copiar o texto após o traço para o campo
-"justificativa" daquela questão. Isso vale mesmo que a lista de gabarito
-esteja dezenas de parágrafos depois da questão no documento — não ignore
-essa seção só porque está longe.
-
-Padrão importante — TABELAS: quando aparecer um bloco [TABELA]...[/TABELA],
-é uma tabela do Word representada linha a linha, colunas separadas por
-" | ". A primeira linha costuma ser o cabeçalho das colunas (ex:
-"Questão | Resposta | Dificuldade | Conteúdo"). Uma tabela assim pode
-funcionar como um gabarito-resumo: cada linha seguinte corresponde a uma
-questão pelo número, e as colunas trazem informações daquela questão
-(resposta correta, dificuldade, tema). Use o número da linha da tabela
-para casar com a questão correspondente (mesma lógica do gabarito
-comentado em lista, mas em formato de tabela).
-
-Unidade do conteúdo: quando o documento tiver um cabeçalho "Unidade N" ou
-"Bloco N" (ver catálogo acima), preencha "unidade" com um valor curto e
-normalizado, tipo "Unidade 1", "Unidade 3" (converta romano pra arábico:
-"Unidade III" vira "Unidade 3"). Um documento pode ter mais de uma unidade
-dentro dele (várias seções) — nesse caso cada questão leva a unidade do
-cabeçalho mais próximo ACIMA dela. Se o documento inteiro não tiver
-nenhum cabeçalho desse tipo, deixe "unidade" como string vazia.
-
-Dificuldade da questão: procure, no texto da questão ou numa tabela como
-a descrita acima, alguma indicação explícita do nível de dificuldade —
-rótulos como "Dificuldade: Fácil", "Nível: Médio", "Grau de dificuldade:
-Difícil", ou uma coluna de tabela chamada "Dificuldade"/"Nível". Só
-preencha o campo "dificuldade" quando isso estiver EXPLÍCITO no
-documento — não tente adivinhar ou julgar a dificuldade pelo conteúdo da
-questão. Normalize o valor para exatamente um destes três: "Fácil",
-"Média" (isso inclui variações como "média", "intermediária",
-"intermediário", "médio") ou "Difícil". Se não houver nenhuma indicação
-explícita de dificuldade em lugar nenhum do documento para aquela
-questão, deixe "dificuldade" como string vazia.
-
-Para cada questão, extraia:
-
-- "titulo": use o cabeçalho da questão POR INTEIRO, exatamente como está no
-  texto — se aparecer "Questão 3 — Cardinalidade 1:N/N:N" ou "Questão 3:
-  Cardinalidade 1:N/N:N", o título é essa linha inteira, não apenas
-  "Questão 3". Só use o genérico "Questão N" quando não houver NENHUM texto
-  descritivo depois do número no cabeçalho.
-- "tipo": "Objetiva" (múltipla escolha) ou "Discursiva" (sem alternativas)
-- "unidade": "Unidade N" ou "" (vazio) — ver regra acima
-- "dificuldade": "Fácil", "Média", "Difícil" ou "" (vazio) — ver regra acima
-- "enunciado": o texto da pergunta, SEM marcadores de formatação e SEM as alternativas
-- "correta": texto da alternativa correta, sem marcadores (vazio se Discursiva)
-- "incorretas": lista com o texto das demais alternativas, sem marcadores (vazio se Discursiva)
-- "justificativa": comentário/justificativa da resposta, se existir no texto (senão string vazia)
-- "tem_codigo_ou_calculo": true/false — veja regra abaixo
-
-Regra do campo "tem_codigo_ou_calculo": marque true se QUALQUER campo desta
-questão (enunciado, correta, incorretas ou justificativa) contiver:
-(a) um trecho de código de programação, em qualquer linguagem (Python, SQL,
-Java, C, JavaScript, pseudocódigo, HTML, etc.) — reconheça por sintaxe
-típica: chaves { }, ponto e vírgula, palavras-chave (def, class, function,
-SELECT, INSERT, void, public, import, #include, <tag>, etc.), indentação
-de código, ou blocos de comando; OU
-(b) uma fórmula, equação ou operação matemática/de cálculo — expressões
-com operadores (+, -, *, /, ^, =), frações, raízes, somatórios, potências,
-ou qualquer cálculo numérico que o aluno precise resolver.
-Marque false se não houver nada disso — texto comum, mesmo com números
-soltos (datas, quantidades, percentuais mencionados em prosa), não conta.
-Essa marcação decide se a questão vai para GIFT ou XML depois (código e
-fórmulas têm caracteres que colidem com a sintaxe do GIFT), então erre para
-o lado de marcar true em caso de dúvida real.
-
-Regras importantes:
-- Remova os marcadores [VERMELHO], [MARCADO], [NEGRITO] do resultado final — são só pistas, não devem aparecer no texto extraído.
-- Não invente conteúdo que não está no texto original.
-- Se não conseguir identificar com confiança qual alternativa é a correta, deixe "correta" vazio e devolva todas em "incorretas".
-- Seja consistente: para o mesmo texto de entrada, sua extração deve ser sempre a mesma (não varie redação nem estrutura entre execuções).
 """.strip()
 
 SCHEMA_RESPOSTA = {
@@ -528,6 +364,22 @@ def _contem_codigo_ou_calculo_regex(questao: dict) -> bool:
     ]
     texto_completo = "\n".join(campos)
     return bool(_PADRAO_CODIGO.search(texto_completo) or _PADRAO_CALCULO.search(texto_completo))
+
+
+# Rede de segurança pra remoção de prefixo de letra na justificativa: a
+# instrução no prompt pede pra IA remover "(A)", "B)", "A." etc. do início
+# de cada item recapitulado, mas essa é uma transformação mecânica que a
+# IA nem sempre aplica de forma consistente — então reforçamos por regex
+# depois, igual já fazemos com tem_codigo_ou_calculo. Exige a letra COLADA
+# em pontuação (parênteses ou ponto) pra nunca remover uma letra "solta"
+# que por acaso comece uma frase comum (ex: "A resposta correta é...").
+_PADRAO_PREFIXO_ALTERNATIVA = re.compile(r"^[\*\-•]?\s*(\([A-Za-z]\)|[A-Za-z][.\)])\s+", re.MULTILINE)
+
+
+def _remover_prefixos_alternativa(texto: str) -> str:
+    if not texto:
+        return texto
+    return _PADRAO_PREFIXO_ALTERNATIVA.sub("", texto)
 
 
 # =========================
@@ -623,6 +475,10 @@ def extrair_questoes_via_ia(
     for q in questoes:
         q["modo"] = "extraido_via_ia"
         q["qtd_alternativas"] = (1 + len(q.get("incorretas", []))) if q["tipo"] == "Objetiva" else 0
+        # Rede de segurança: mesmo que a IA não tenha removido "(A)", "B)"
+        # etc. do início de cada item recapitulado na justificativa, essa
+        # limpeza mecânica garante que não sobre nenhum.
+        q["justificativa"] = _remover_prefixos_alternativa(q.get("justificativa", ""))
         # Tags: tipo, unidade e dificuldade já vieram da IA; disciplina vem
         # do parâmetro. Disciplina/tipo calculados aqui, não pela IA, pelo
         # mesmo motivo de sempre: já temos certeza deles. Unidade e

@@ -86,6 +86,16 @@ export async function questionsRoutes(app: FastifyInstance) {
    * PATCH /questoes/:id — salva a edição feita na tela de revisão. Usa o
    * MESMO schema Zod (editarQuestaoSchema) que o formulário do frontend,
    * então as duas pontas validam exatamente as mesmas regras.
+   *
+   * Além dos campos simples da questão, agora também trata:
+   * - "unidade": encontra ou cria a unidade pelo nome (escopada à mesma
+   *   disciplina da questão) e reassocia questoes.unidadeId — permite
+   *   mover uma questão de "Unidade 1" pra "Unidade 3", por exemplo.
+   *   Enviar string vazia remove a unidade (unidadeId = null).
+   * - "alternativas": atualiza texto/correta de cada alternativa
+   *   existente (por id) — não cria nem remove alternativas, só edita as
+   *   que a extração já gerou.
+   * Tudo dentro de uma transação: ou tudo é salvo, ou nada é.
    */
   app.patch<{ Params: { id: string } }>("/questoes/:id", async (request, reply) => {
     const corpo = editarQuestaoSchema.safeParse(request.body);
@@ -94,17 +104,67 @@ export async function questionsRoutes(app: FastifyInstance) {
     }
 
     try {
-      const [atualizada] = await db
-        .update(questoes)
-        .set({
-          titulo: corpo.data.titulo,
-          enunciado: corpo.data.enunciado,
-          dificuldade: corpo.data.dificuldade || null,
-          justificativa: corpo.data.justificativa,
-          atualizadoEm: new Date(),
-        })
-        .where(eq(questoes.id, request.params.id))
-        .returning();
+      const atualizada = await db.transaction(async (tx) => {
+        const [questaoAtual] = await tx
+          .select({ arquivoId: questoes.arquivoId })
+          .from(questoes)
+          .where(eq(questoes.id, request.params.id));
+
+        if (!questaoAtual) {
+          return null;
+        }
+
+        let unidadeId: string | null | undefined = undefined; // undefined = não mexe no campo
+        if (corpo.data.unidade !== undefined) {
+          if (corpo.data.unidade === "") {
+            unidadeId = null;
+          } else {
+            const [arquivoDaQuestao] = await tx
+              .select({ disciplinaId: arquivos.disciplinaId })
+              .from(arquivos)
+              .where(eq(arquivos.id, questaoAtual.arquivoId));
+
+            const [unidadeExistente] = await tx
+              .select()
+              .from(unidades)
+              .where(eq(unidades.nome, corpo.data.unidade));
+
+            if (unidadeExistente && unidadeExistente.disciplinaId === arquivoDaQuestao.disciplinaId) {
+              unidadeId = unidadeExistente.id;
+            } else {
+              const [novaUnidade] = await tx
+                .insert(unidades)
+                .values({ disciplinaId: arquivoDaQuestao.disciplinaId, nome: corpo.data.unidade })
+                .returning();
+              unidadeId = novaUnidade.id;
+            }
+          }
+        }
+
+        const [questaoAtualizada] = await tx
+          .update(questoes)
+          .set({
+            titulo: corpo.data.titulo,
+            enunciado: corpo.data.enunciado,
+            dificuldade: corpo.data.dificuldade || null,
+            justificativa: corpo.data.justificativa,
+            ...(unidadeId !== undefined ? { unidadeId } : {}),
+            atualizadoEm: new Date(),
+          })
+          .where(eq(questoes.id, request.params.id))
+          .returning();
+
+        if (corpo.data.alternativas) {
+          for (const alternativa of corpo.data.alternativas) {
+            await tx
+              .update(alternativas)
+              .set({ texto: alternativa.texto, correta: alternativa.correta })
+              .where(eq(alternativas.id, alternativa.id));
+          }
+        }
+
+        return questaoAtualizada;
+      });
 
       if (!atualizada) {
         return reply.status(404).send({ erro: "Questão não encontrada." });
