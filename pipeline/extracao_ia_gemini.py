@@ -35,13 +35,144 @@ from docx.table import Table
 from docx.text.paragraph import Paragraph
 
 from google import genai
-from google.genai import types
+from google.genai import errors, types
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 # Registro preenchido durante a leitura do .docx: nome único -> dados da
 # imagem. Mesma ideia do IMAGENS_EXTRAIDAS do seu script original — guarde
 # essa variável se quiser usar os bytes das imagens depois, na hora de
 # montar o GIFT/XML de verdade (substituindo os marcadores por <img>).
 IMAGENS_EXTRAIDAS: dict[str, dict] = {}
+
+# Registro preenchido durante a leitura do .docx: nome único -> {marcador,
+# latex}. Mesmo princípio de IMAGENS_EXTRAIDAS, só que pra fórmulas
+# (equações inseridas via Word > Inserir > Equação, formato OMML).
+FORMULAS_EXTRAIDAS: dict[str, dict] = {}
+
+_NS_MATH = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+
+
+def _tag_math(nome: str) -> str:
+    return f"{{{_NS_MATH}}}{nome}"
+
+
+# Símbolos Unicode comuns em fórmula de prova -> comando LaTeX. O Word
+# frequentemente guarda o caractere Unicode direto (ex: "β"), não o nome.
+_SIMBOLOS_LATEX = {
+    "α": r"\alpha", "β": r"\beta", "γ": r"\gamma", "Δ": r"\Delta",
+    "δ": r"\delta", "θ": r"\theta", "λ": r"\lambda", "μ": r"\mu",
+    "π": r"\pi", "Σ": r"\Sigma", "σ": r"\sigma", "φ": r"\phi",
+    "Ω": r"\Omega", "×": r"\times", "÷": r"\div", "±": r"\pm",
+    "≤": r"\leq", "≥": r"\geq", "≠": r"\neq", "∞": r"\infty",
+}
+
+
+def _texto_latex(texto: str) -> str:
+    for simbolo, comando in _SIMBOLOS_LATEX.items():
+        if simbolo in texto:
+            texto = texto.replace(simbolo, comando + " ")
+    return texto
+
+
+def _omml_para_latex(elemento) -> str:
+    """
+    Converte um nó OMML (fórmula do Word) pra uma string LaTeX equivalente.
+    Reconhece as estruturas mais comuns em prova: texto, potência/expoente
+    (sSup), subscrito (sSub), fração (f), raiz (rad), delimitador tipo
+    parênteses/chaves (d) e matriz (m). Qualquer estrutura não reconhecida
+    cai no caso genérico: concatena o texto de dentro, na ordem — não
+    fica com notação perfeita, mas não quebra e não perde conteúdo.
+    """
+    if elemento.tag == _tag_math("t"):
+        return _texto_latex(elemento.text or "")
+
+    if elemento.tag == _tag_math("sSup"):
+        base = elemento.find(_tag_math("e"))
+        exp = elemento.find(_tag_math("sup"))
+        return f"{_omml_filhos_para_latex(base)}^{{{_omml_filhos_para_latex(exp)}}}"
+
+    if elemento.tag == _tag_math("sSub"):
+        base = elemento.find(_tag_math("e"))
+        sub = elemento.find(_tag_math("sub"))
+        return f"{_omml_filhos_para_latex(base)}_{{{_omml_filhos_para_latex(sub)}}}"
+
+    if elemento.tag == _tag_math("sSubSup"):
+        base = elemento.find(_tag_math("e"))
+        sub = elemento.find(_tag_math("sub"))
+        sup = elemento.find(_tag_math("sup"))
+        return (
+            f"{_omml_filhos_para_latex(base)}"
+            f"_{{{_omml_filhos_para_latex(sub)}}}^{{{_omml_filhos_para_latex(sup)}}}"
+        )
+
+    if elemento.tag == _tag_math("f"):
+        num = elemento.find(_tag_math("num"))
+        den = elemento.find(_tag_math("den"))
+        return f"\\frac{{{_omml_filhos_para_latex(num)}}}{{{_omml_filhos_para_latex(den)}}}"
+
+    if elemento.tag == _tag_math("rad"):
+        deg = elemento.find(_tag_math("deg"))
+        base = elemento.find(_tag_math("e"))
+        texto_deg = _omml_filhos_para_latex(deg)
+        base_latex = _omml_filhos_para_latex(base)
+        return f"\\sqrt[{texto_deg}]{{{base_latex}}}" if texto_deg else f"\\sqrt{{{base_latex}}}"
+
+    if elemento.tag == _tag_math("d"):
+        dPr = elemento.find(_tag_math("dPr"))
+        beg_chr, end_chr = "(", ")"
+        if dPr is not None:
+            beg_el = dPr.find(_tag_math("begChr"))
+            end_el = dPr.find(_tag_math("endChr"))
+            if beg_el is not None:
+                beg_chr = beg_el.get(_tag_math("val")) or ""
+            if end_el is not None:
+                end_chr = end_el.get(_tag_math("val")) or ""
+        conteudo = "".join(
+            _omml_para_latex(filho) for filho in elemento if filho.tag != _tag_math("dPr")
+        )
+        abre = "\\{" if beg_chr == "{" else (beg_chr or ".")
+        fecha = "\\}" if end_chr == "}" else (end_chr or ".")
+        return f"\\left{abre} {conteudo} \\right{fecha}"
+
+    if elemento.tag == _tag_math("m"):
+        linhas_latex = []
+        for linha in elemento.findall(_tag_math("mr")):
+            celulas = [_omml_filhos_para_latex(cel) for cel in linha.findall(_tag_math("e"))]
+            linhas_latex.append(" & ".join(celulas))
+        return "\\begin{matrix}" + " \\\\ ".join(linhas_latex) + "\\end{matrix}"
+
+    return _omml_filhos_para_latex(elemento)
+
+
+def _omml_filhos_para_latex(elemento) -> str:
+    if elemento is None:
+        return ""
+    return "".join(_omml_para_latex(filho) for filho in elemento)
+
+
+def extrair_formulas_do_paragrafo(paragrafo) -> list[str]:
+    """
+    Localiza fórmulas OMML (Word > Inserir > Equação) no parágrafo,
+    converte cada uma pra LaTeX, registra em FORMULAS_EXTRAIDAS e devolve
+    a lista de marcadores (__MOODLE_FORMULA_<hash>__) na ordem em que
+    aparecem. Mesmo padrão de extrair_imagens_do_paragrafo.
+    """
+    marcadores = []
+    for math_el in paragrafo._p.iter(_tag_math("oMath")):
+        latex = _omml_para_latex(math_el).strip()
+        if not latex:
+            continue
+
+        digest = hashlib.sha256(latex.encode("utf-8")).hexdigest()[:16]
+        nome = f"formula_{digest}"
+        marcador = f"__MOODLE_FORMULA_{digest.upper()}__"
+
+        if nome not in FORMULAS_EXTRAIDAS:
+            FORMULAS_EXTRAIDAS[nome] = {"nome": nome, "marcador": marcador, "latex": latex}
+
+        marcadores.append(marcador)
+
+    return marcadores
 
 
 # =========================
@@ -223,8 +354,9 @@ def extrair_texto_marcado(docx_path: str) -> str:
             paragrafo = bloco
             texto = paragrafo.text.strip()
             marcadores_imagem = extrair_imagens_do_paragrafo(paragrafo, doc)
+            marcadores_formula = extrair_formulas_do_paragrafo(paragrafo)
 
-            if not texto and not marcadores_imagem:
+            if not texto and not marcadores_imagem and not marcadores_formula:
                 continue
 
             if texto:
@@ -261,6 +393,8 @@ def extrair_texto_marcado(docx_path: str) -> str:
             # parágrafo — mesma posição que o script original usa.
             for marcador in marcadores_imagem:
                 linhas.append(marcador)
+            for marcador in marcadores_formula:
+                linhas.append(marcador)
         else:
             # É uma tabela.
             linhas.append(_texto_tabela_marcado(bloco))
@@ -277,6 +411,7 @@ Você recebe o texto extraído de uma prova em Word. Provas vêm de professores/
 MARCADORES NO TEXTO (como interpretar a entrada):
 - [VERMELHO]...[/VERMELHO], [MARCADO]...[/MARCADO] (destaque amarelo), [NEGRITO]...[/NEGRITO]: formatação original do Word. Frequentemente indicam a alternativa correta, mas cruze sempre com o contexto (ex: um gabarito escrito no texto, tipo "Resposta: C"). [VERMELHO] cobre qualquer tom de vermelho (990000, CC0000, FF0000...), não só o puro.
 - __MOODLE_IMAGE_<código>__ (ex: __MOODLE_IMAGE_A1B2C3D4E5F6A7B8__): posição exata de uma imagem. Copie EXATAMENTE como está, no campo onde ela aparece no texto original (enunciado, alternativa ou justificativa) — nunca altere, descreva, remova ou mova pra outro campo.
+- __MOODLE_FORMULA_<código>__ (ex: __MOODLE_FORMULA_A1B2C3D4E5F6A7B8__): posição exata de uma fórmula/equação matemática inserida pelo Word (Inserir > Equação). Mesma regra da imagem: copie EXATAMENTE como está, no campo onde aparece, nunca descreva, remova ou mova. Você não vê o conteúdo da fórmula (só o marcador), então não tente resolver, avaliar ou comentar sobre ela — apenas preserve o marcador no lugar certo.
 - [ITEM_LISTA_NIVEL0] / [ITEM_LISTA_NIVEL1]: numeração automática do Word, sem dígito visível no texto. Nível 0 sugere item principal (nova questão); nível 1 sugere subitem (alternativa). É pista estrutural, não garantia — um título de seção também pode estar no nível 0.
 - [TABELA]...[/TABELA]: tabela do Word, uma linha por linha do documento, colunas separadas por " | " (primeira linha costuma ser cabeçalho). Pode funcionar como gabarito-resumo (colunas tipo Questão/Resposta/Dificuldade/Unidade) — use o número da linha pra casar com a questão correspondente (mesma lógica do gabarito comentado, ver abaixo).
 Remova todos esses marcadores do resultado final (exceto o de imagem, que deve permanecer) — nenhum deve aparecer no texto extraído.
@@ -363,6 +498,11 @@ def _contem_codigo_ou_calculo_regex(questao: dict) -> bool:
         questao.get("justificativa", ""),
     ]
     texto_completo = "\n".join(campos)
+    # Marcador de fórmula sobrando em qualquer campo já é certeza — não
+    # depende de regex genérico, é o mesmo princípio de "checagem
+    # determinística em vez de julgamento" que já usamos noutros lugares.
+    if "__MOODLE_FORMULA_" in texto_completo:
+        return True
     return bool(_PADRAO_CODIGO.search(texto_completo) or _PADRAO_CALCULO.search(texto_completo))
 
 
@@ -385,7 +525,7 @@ def _remover_prefixos_alternativa(texto: str) -> str:
 # =========================
 # 3) CHAMADA À API (Gemini)
 # =========================
-_PADRAO_UNIDADE_NO_NOME = re.compile(r"\bUNI(?:DADE)?[\s_.\-]*0*([0-9]+)", re.IGNORECASE)
+_PADRAO_UNIDADE_NO_NOME = re.compile(r"U(?:NI(?:DADE)?)?[\s_.\-]*0*([0-9]{1,2})(?!\d)", re.IGNORECASE)
 
 
 def extrair_unidade_do_nome_arquivo(caminho) -> str:
@@ -429,6 +569,34 @@ def processar_arquivo(caminho, disciplina: str, log=print) -> list[dict]:
     return questoes
 
 
+# Códigos HTTP que valem repetir: 429 (limite de taxa) e a faixa 5xx
+# (servidor sobrecarregado/instável). NÃO inclui 4xx como 400 (chave
+# inválida) ou 404 (modelo inexistente) — esses são erros permanentes,
+# repetir só atrasa a falha sem chance de dar certo.
+_CODIGOS_TRANSITORIOS = {429, 500, 502, 503, 504}
+
+
+def _eh_erro_transitorio(excecao: BaseException) -> bool:
+    return isinstance(excecao, errors.APIError) and excecao.code in _CODIGOS_TRANSITORIOS
+
+
+@retry(
+    retry=retry_if_exception(_eh_erro_transitorio),
+    stop=stop_after_attempt(4),
+    wait=wait_exponential(multiplier=2, min=2, max=30),
+    reraise=True,
+)
+def _chamar_gemini(client: genai.Client, modelo: str, texto_marcado: str, config: types.GenerateContentConfig):
+    """
+    Isola a chamada de rede numa função própria porque o tenacity re-executa
+    a função INTEIRA a cada tentativa — não dá pra "retomar do meio" de uma
+    função maior. reraise=True: sem isso, depois de esgotar as tentativas,
+    o tenacity levantaria a própria exceção dele (RetryError) escondendo a
+    mensagem original do Gemini.
+    """
+    return client.models.generate_content(model=modelo, contents=texto_marcado, config=config)
+
+
 def extrair_questoes_via_ia(
     texto_marcado: str,
     disciplina: str,
@@ -456,10 +624,11 @@ def extrair_questoes_via_ia(
 
     client = genai.Client(api_key=api_key)
 
-    resposta = client.models.generate_content(
-        model=modelo,
-        contents=texto_marcado,
-        config=types.GenerateContentConfig(
+    resposta = _chamar_gemini(
+        client,
+        modelo,
+        texto_marcado,
+        types.GenerateContentConfig(
             system_instruction=INSTRUCAO_SISTEMA,
             response_mime_type="application/json",
             response_schema=SCHEMA_RESPOSTA,

@@ -63,7 +63,7 @@ Upload (.docx, um ou mais arquivos) → extração via IA (Gemini) → persistê
 
 ### Pronto
 - [x] Workspace configurado (pnpm)
-- [x] Schema do Postgres (Drizzle) — disciplinas, unidades, arquivos, questões, alternativas, imagens
+- [x] Schema do Postgres (Drizzle) — disciplinas, unidades, arquivos, questões, alternativas, imagens, fórmulas
 - [x] `POST /extractions` (multipart) — recebe os `.docx` de verdade, aciona o pipeline Python, persiste o resultado (questões, alternativas, imagens associadas por marcador, tags derivadas de disciplina/tipo/unidade/dificuldade)
 - [x] Correção: extração com múltiplos arquivos não duplica mais questões (cada questão carrega seu `arquivo_origem`)
 - [x] `GET /disciplinas`, `GET /questoes?disciplinaId=`, `PATCH /questoes/:id`
@@ -75,8 +75,16 @@ Upload (.docx, um ou mais arquivos) → extração via IA (Gemini) → persistê
 - [x] `upload-page.tsx` removida — upload passou a viver dentro do formulário de extração, não é mais uma etapa separada
 - [x] Correção: edição de dificuldade na tela de revisão (rota `PATCH /questoes/:id` sem tratamento de erro escondia a causa real de falhas do banco)
 - [x] XML gerado validado importando num Moodle de teste real
+- [x] Alternativas editáveis no diálogo de edição, com marcação de qual é a correta
+- [x] Edição de unidade — permite mover uma questão entre unidades direto na tela de revisão
+- [x] Suporte a fórmulas matemáticas (Word > Inserir > Equação) — convertidas de OMML para LaTeX e renderizadas no Moodle via MathJax
+- [x] Retry automático em erros transitórios da API do Gemini (limite de taxa, servidor sobrecarregado)
 
 ### Pendente
 - [ ] `npx shadcn init` de verdade (os componentes atuais foram escritos à mão)
 - [ ] Testes automatizados
 - [ ] Avaliar outras IAs além do Gemini (OpenAI, Claude) para a extração
+
+## Limitações conhecidas
+
+- Só `.docx` é suportado — arquivos `.doc` (formato antigo do Word) precisam ser convertidos manualmente antes do upload.

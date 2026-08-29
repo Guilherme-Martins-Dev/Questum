@@ -5,7 +5,7 @@ import path from "node:path";
 import os from "node:os";
 import { z } from "zod";
 import { db } from "../db/client";
-import { arquivos, disciplinas, unidades, questoes, alternativas, imagens } from "../db/schema";
+import { arquivos, disciplinas, unidades, questoes, alternativas, imagens, formulas } from "../db/schema";
 import { executarExtracao } from "../services/extraction.service";
 
 const campoDisciplinaSchema = z.string().trim().min(2, "Informe o nome da disciplina.");
@@ -144,12 +144,25 @@ export async function extractionsRoutes(app: FastifyInstance) {
             });
           }
         }
+
+        // Associação fórmula <-> questão: mesmo princípio da imagem,
+        // casando pelo marcador __MOODLE_FORMULA_<hash>__.
+        for (const formula of Object.values(resultado.formulas)) {
+          if (textoCompletoDaQuestao.includes(formula.marcador)) {
+            await db.insert(formulas).values({
+              questaoId: questaoRegistro.id,
+              marcador: formula.marcador,
+              latex: formula.latex,
+            });
+          }
+        }
       }
 
       return reply.status(201).send({
         disciplinaId: disciplinaRegistro.id,
         questoesExtraidas: resultado.questoes.length,
         imagensExtraidas: Object.keys(resultado.imagens).length,
+        formulasExtraidas: Object.keys(resultado.formulas).length,
       });
     } catch (erro) {
       request.log.error(erro);

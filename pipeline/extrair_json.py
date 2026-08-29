@@ -36,7 +36,7 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 
-from extracao_ia_gemini import IMAGENS_EXTRAIDAS, processar_arquivo
+from extracao_ia_gemini import FORMULAS_EXTRAIDAS, IMAGENS_EXTRAIDAS, processar_arquivo
 
 
 def log(mensagem: str) -> None:
@@ -71,6 +71,7 @@ def main() -> None:
             todas_questoes.extend(questoes_do_arquivo)
 
         log(f"[INFO] {len(IMAGENS_EXTRAIDAS)} imagem(ns) encontrada(s) no total.")
+        log(f"[INFO] {len(FORMULAS_EXTRAIDAS)} fórmula(s) encontrada(s) no total.")
         log(f"[INFO] {len(todas_questoes)} questão(ões) no total, de {len(caminhos)} arquivo(s).")
     except Exception as erro:
         # Erro limpo em stderr (código de saída != 0), em vez de um
@@ -80,7 +81,12 @@ def main() -> None:
         sys.exit(1)
 
     # ÚNICA linha impressa em stdout: o JSON que o Node vai consumir.
-    print(json.dumps({"questoes": todas_questoes, "imagens": IMAGENS_EXTRAIDAS}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {"questoes": todas_questoes, "imagens": IMAGENS_EXTRAIDAS, "formulas": FORMULAS_EXTRAIDAS},
+            ensure_ascii=False,
+        )
+    )
 
 
 if __name__ == "__main__":

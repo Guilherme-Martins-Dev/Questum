@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { eq, inArray } from "drizzle-orm";
 import { editarQuestaoSchema } from "@questum/shared";
 import { db } from "../db/client";
-import { questoes, unidades, arquivos, disciplinas, alternativas, imagens } from "../db/schema";
+import { questoes, unidades, arquivos, disciplinas, alternativas, imagens, formulas } from "../db/schema";
 
 /**
  * GET /disciplinas — lista as disciplinas já processadas, pra preencher o
@@ -75,10 +75,22 @@ export async function questionsRoutes(app: FastifyInstance) {
       imagensPorQuestao.set(imagem.questaoId, lista);
     }
 
+    const todasFormulas = idsQuestoes.length
+      ? await db.select().from(formulas).where(inArray(formulas.questaoId, idsQuestoes))
+      : [];
+
+    const formulasPorQuestao = new Map<string, typeof todasFormulas>();
+    for (const formula of todasFormulas) {
+      const lista = formulasPorQuestao.get(formula.questaoId) ?? [];
+      lista.push(formula);
+      formulasPorQuestao.set(formula.questaoId, lista);
+    }
+
     return linhas.map((linha) => ({
       ...linha,
       alternativas: (alternativasPorQuestao.get(linha.id) ?? []).sort((a, b) => a.ordem - b.ordem),
       imagens: imagensPorQuestao.get(linha.id) ?? [],
+      formulas: formulasPorQuestao.get(linha.id) ?? [],
     }));
   });
 

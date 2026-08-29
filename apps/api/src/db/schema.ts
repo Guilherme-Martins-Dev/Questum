@@ -80,6 +80,15 @@ export const imagens = pgTable("imagens", {
   dadosBase64: text("dados_base64").notNull(),
 });
 
+export const formulas = pgTable("formulas", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  questaoId: uuid("questao_id")
+    .references(() => questoes.id, { onDelete: "cascade" })
+    .notNull(),
+  marcador: text("marcador").notNull(), // __MOODLE_FORMULA_<hash>__
+  latex: text("latex").notNull(),
+});
+
 // --- Relações (só pra consultas aninhadas do Drizzle, não afeta o schema SQL) ---
 
 export const disciplinasRelations = relations(disciplinas, ({ many }) => ({
@@ -100,6 +109,7 @@ export const questoesRelations = relations(questoes, ({ one, many }) => ({
   unidade: one(unidades, { fields: [questoes.unidadeId], references: [unidades.id] }),
   alternativas: many(alternativas),
   imagens: many(imagens),
+  formulas: many(formulas),
 }));
 
 export const alternativasRelations = relations(alternativas, ({ one }) => ({
@@ -108,4 +118,8 @@ export const alternativasRelations = relations(alternativas, ({ one }) => ({
 
 export const imagensRelations = relations(imagens, ({ one }) => ({
   questao: one(questoes, { fields: [imagens.questaoId], references: [questoes.id] }),
+}));
+
+export const formulasRelations = relations(formulas, ({ one }) => ({
+  questao: one(questoes, { fields: [formulas.questaoId], references: [questoes.id] }),
 }));
