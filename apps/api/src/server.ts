@@ -1,6 +1,7 @@
 import "dotenv/config";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import helmet from "@fastify/helmet";
 import multipart from "@fastify/multipart";
 import { client } from "./db/client";
 import { extractionsRoutes } from "./routes/extractions.routes";
@@ -10,6 +11,21 @@ import { falharExtracoesInterrompidas } from "./services/extraction-job.service"
 import { verificarAmbientePipeline } from "./services/extraction.service";
 
 const app = Fastify({ logger: true });
+
+// Headers de segurança. A API só devolve JSON e um XML de download — nenhuma
+// resposta carrega HTML/script próprio, então a CSP mais estrita (`default-src
+// 'none'`) é a correta. helmet também põe nosniff, frameguard, Referrer-Policy
+// e afins. HSTS fica desligado em dev (http); ligue via env em produção https.
+await app.register(helmet, {
+  contentSecurityPolicy: {
+    useDefaults: false,
+    directives: { defaultSrc: ["'none'"], frameAncestors: ["'none'"] },
+  },
+  frameguard: { action: "deny" },
+  hsts: process.env.NODE_ENV === "production",
+  // A API é lida por fetch de outra origem (Vite dev / front hospedado à parte).
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+});
 
 // Sem CORS_ORIGIN, libera só os hosts de dev do Vite. Em produção o front
 // é servido pela mesma origem (proxy), então nem precisa de CORS — mas

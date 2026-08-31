@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { useDisciplinas } from "@/features/questions/hooks/use-disciplinas";
 import { useExtractQuestions } from "../hooks/use-extract-questions";
 import { ExtractionProgress } from "./extraction-progress";
 
@@ -36,6 +37,7 @@ export function ExtractionForm() {
   const [arquivos, setArquivos] = useState<File[]>([]);
   const [extracaoId, setExtracaoId] = useState<string | null>(null);
   const extracao = useExtractQuestions();
+  const disciplinas = useDisciplinas();
 
   // Trava síncrona contra duplo clique/duplo submit: extracao.isPending só
   // vira true depois de um re-render do React, então um clique duplo bem
@@ -93,18 +95,33 @@ export function ExtractionForm() {
   }
 
   const desabilitado = extracao.isPending;
+  const tamanhoTotal = arquivos.reduce((soma, a) => soma + a.size, 0);
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
       <div className="space-y-1.5">
         <Label htmlFor="disciplina">Disciplina</Label>
         <Input
           id="disciplina"
-          placeholder="Banco de Dados"
+          list="disciplinas-existentes"
+          placeholder="Ex.: Banco de Dados"
           disabled={desabilitado}
+          autoComplete="off"
           {...register("disciplina")}
         />
-        {errors.disciplina && <p className="text-xs text-destructive">{errors.disciplina.message}</p>}
+        <datalist id="disciplinas-existentes">
+          {(disciplinas.data ?? []).map((d) => (
+            <option key={d.id} value={d.nome} />
+          ))}
+        </datalist>
+        {errors.disciplina ? (
+          <p className="text-xs text-destructive">{errors.disciplina.message}</p>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Digite um nome novo ou escolha uma disciplina já processada para adicionar mais questões
+            a ela.
+          </p>
+        )}
       </div>
 
       <div className="space-y-1.5">
@@ -112,54 +129,87 @@ export function ExtractionForm() {
         <div
           {...getRootProps()}
           className={cn(
-            "rounded-md border-2 border-dashed p-6 text-center text-sm text-muted-foreground transition-colors",
+            "flex flex-col items-center rounded-lg border-2 border-dashed px-6 py-10 text-center transition-all",
             desabilitado && "cursor-not-allowed opacity-60",
-            isDragActive ? "border-primary bg-primary/5" : "border-border hover:border-primary/50",
+            isDragActive
+              ? "border-primary bg-primary/10 ring-2 ring-primary/20"
+              : "border-border hover:border-accent/60 hover:bg-accent/5",
           )}
         >
           <input {...getInputProps()} />
-          <FileUp className="mx-auto mb-2 h-6 w-6 text-muted-foreground" />
-          <p>Arraste os arquivos aqui ou clique para selecionar</p>
-          <p className="mt-1 text-xs text-muted-foreground">.docx — vários arquivos de uma vez</p>
+          <div
+            className={cn(
+              "mb-3 flex h-12 w-12 items-center justify-center rounded-full transition-colors",
+              isDragActive ? "bg-primary/15 text-primary" : "bg-accent/10 text-accent",
+            )}
+          >
+            <FileUp className="h-6 w-6" />
+          </div>
+          <p className="text-sm font-medium">
+            {isDragActive ? "Solte para adicionar" : "Arraste os arquivos aqui"}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            ou <span className="font-medium text-foreground">clique para selecionar</span> · .docx ·
+            vários de uma vez
+          </p>
         </div>
       </div>
 
       {arquivos.length > 0 && (
-        <ul className="space-y-2">
-          {arquivos.map((arquivo) => {
-            const unidade = detectarUnidadePeloNome(arquivo.name);
-            return (
-              <li
-                key={arquivo.name}
-                className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2"
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>
+              {arquivos.length} {arquivos.length === 1 ? "arquivo" : "arquivos"} ·{" "}
+              {formatarTamanho(tamanhoTotal)}
+            </span>
+            {!desabilitado && (
+              <button
+                type="button"
+                onClick={() => setArquivos([])}
+                className="transition-colors hover:text-foreground"
               >
-                <div className="flex min-w-0 items-center gap-2">
-                  <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="truncate text-sm">{arquivo.name}</span>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {formatarTamanho(arquivo.size)}
-                  </span>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  {unidade && (
-                    <SimpleTooltip content="Palpite a partir do nome do arquivo. A unidade de cada questão é definida pela IA durante a extração — não por isto.">
-                      <Badge variant="accent">detectado: {unidade}</Badge>
-                    </SimpleTooltip>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => removerArquivo(arquivo.name)}
-                    disabled={desabilitado}
-                    className="text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
-                    aria-label={`Remover ${arquivo.name}`}
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+                Limpar tudo
+              </button>
+            )}
+          </div>
+          <ul className="space-y-2">
+            {arquivos.map((arquivo) => {
+              const unidade = detectarUnidadePeloNome(arquivo.name);
+              return (
+                <li
+                  key={arquivo.name}
+                  className="flex items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2"
+                >
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                      <FileText className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{arquivo.name}</p>
+                      <p className="text-xs text-muted-foreground">{formatarTamanho(arquivo.size)}</p>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {unidade && (
+                      <SimpleTooltip content="Palpite a partir do nome do arquivo. A unidade de cada questão é definida pela IA durante a extração — não por isto.">
+                        <Badge variant="accent">detectado: {unidade}</Badge>
+                      </SimpleTooltip>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => removerArquivo(arquivo.name)}
+                      disabled={desabilitado}
+                      className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                      aria-label={`Remover ${arquivo.name}`}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       )}
 
       <Button
@@ -169,7 +219,11 @@ export function ExtractionForm() {
         className="w-full sm:w-auto"
       >
         {!extracao.isPending && <Sparkles className="h-4 w-4" />}
-        {extracao.isPending ? "Enviando…" : "Iniciar extração"}
+        {extracao.isPending
+          ? "Enviando…"
+          : arquivos.length > 0
+            ? `Extrair ${arquivos.length} ${arquivos.length === 1 ? "arquivo" : "arquivos"}`
+            : "Iniciar extração"}
       </Button>
     </form>
   );

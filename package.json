@@ -4,6 +4,7 @@
   "scripts": {
     "dev:web": "pnpm --filter @questum/web dev",
     "dev:api": "pnpm --filter @questum/api dev",
+    "test": "pnpm -r --if-present test",
     "db:generate": "pnpm --filter @questum/api db:generate",
     "db:migrate": "pnpm --filter @questum/api db:migrate"
   },

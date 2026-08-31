@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Download, Loader2, Search, SlidersHorizontal } from "lucide-react";
+import { Download, Search, SlidersHorizontal } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,13 +14,12 @@ import {
   escolherDisciplinaInicial,
   salvarDisciplinaPreferida,
 } from "@/features/questions/lib/disciplina-preferida";
-
-function normalizar(texto: string): string {
-  return texto
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "");
-}
+import {
+  FILTROS_VAZIOS,
+  filtrarQuestoes,
+  temFiltroAtivo,
+  type FiltrosQuestao,
+} from "@/features/questions/lib/filtrar-questoes";
 
 export function QuestionsReviewPage() {
   const disciplinas = useDisciplinas();
@@ -53,6 +52,13 @@ export function QuestionsReviewPage() {
   const [filtroDificuldade, setFiltroDificuldade] = useState("");
   const [filtroUnidade, setFiltroUnidade] = useState("");
 
+  const filtros: FiltrosQuestao = {
+    busca,
+    tipo: filtroTipo,
+    dificuldade: filtroDificuldade,
+    unidade: filtroUnidade,
+  };
+
   // Trocar de disciplina zera os filtros: as unidades são diferentes entre
   // disciplinas e um "Unidade 2" preso de outra disciplina esconde tudo
   // sem deixar claro o porquê (o select de unidade some quando a nova
@@ -72,27 +78,22 @@ export function QuestionsReviewPage() {
     return [...nomes].sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true }));
   }, [questoes.data]);
 
-  const questoesFiltradas = useMemo(() => {
-    const termo = normalizar(busca.trim());
-    return (questoes.data ?? []).filter((q) => {
-      if (filtroTipo && q.tipo !== filtroTipo) return false;
-      if (filtroDificuldade && (q.dificuldade || "") !== filtroDificuldade) return false;
-      if (filtroUnidade && q.unidadeNome !== filtroUnidade) return false;
-      if (termo && !normalizar(`${q.titulo} ${q.enunciado}`).includes(termo)) return false;
-      return true;
-    });
-  }, [questoes.data, busca, filtroTipo, filtroDificuldade, filtroUnidade]);
+  const questoesFiltradas = useMemo(
+    () => filtrarQuestoes(questoes.data ?? [], filtros),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [questoes.data, busca, filtroTipo, filtroDificuldade, filtroUnidade],
+  );
 
-  const temFiltroAtivo = Boolean(busca || filtroTipo || filtroDificuldade || filtroUnidade);
+  const filtrosAtivos = temFiltroAtivo(filtros);
   const total = questoes.data?.length ?? 0;
 
   const { exportar, gerando } = useExportXml();
 
   function limparFiltros() {
-    setBusca("");
-    setFiltroTipo("");
-    setFiltroDificuldade("");
-    setFiltroUnidade("");
+    setBusca(FILTROS_VAZIOS.busca);
+    setFiltroTipo(FILTROS_VAZIOS.tipo);
+    setFiltroDificuldade(FILTROS_VAZIOS.dificuldade);
+    setFiltroUnidade(FILTROS_VAZIOS.unidade);
   }
 
   const semDisciplinas = disciplinas.data && disciplinas.data.length === 0;
@@ -121,19 +122,11 @@ export function QuestionsReviewPage() {
             {total > 0 && (
               <Button
                 onClick={() => disciplinaId && exportar(disciplinaId)}
-                disabled={!disciplinaId || gerando}
+                loading={gerando}
+                disabled={!disciplinaId}
               >
-                {gerando ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Gerando…
-                  </>
-                ) : (
-                  <>
-                    <Download className="h-4 w-4" />
-                    Exportar XML
-                  </>
-                )}
+                {!gerando && <Download className="h-4 w-4" />}
+                {gerando ? "Gerando…" : "Exportar XML"}
               </Button>
             )}
           </>
@@ -220,7 +213,7 @@ export function QuestionsReviewPage() {
                   </Select>
                 )}
 
-                {temFiltroAtivo && (
+                {filtrosAtivos && (
                   <Button variant="ghost" size="sm" onClick={limparFiltros}>
                     Limpar filtros
                   </Button>
@@ -228,7 +221,7 @@ export function QuestionsReviewPage() {
               </div>
 
               <p className="text-sm text-muted-foreground">
-                {temFiltroAtivo ? (
+                {filtrosAtivos ? (
                   <>
                     <span className="font-medium text-foreground">{questoesFiltradas.length}</span> de {total}{" "}
                     {total === 1 ? "questão" : "questões"}
