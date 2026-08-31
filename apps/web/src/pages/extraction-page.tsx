@@ -1,13 +1,19 @@
+import { PageHeader } from "@/components/layout/page-header";
+import { Card, CardContent } from "@/components/ui/card";
 import { ExtractionForm } from "@/features/extraction/components/extraction-form";
 
 export function ExtractionPage() {
   return (
-    <div className="mx-auto max-w-2xl p-8">
-      <h1 className="text-2xl font-medium">Configurar extração</h1>
-      <p className="mb-6 mt-1 text-sm text-neutral-500">
-        Informe a disciplina e envie os arquivos .docx.
-      </p>
-      <ExtractionForm />
+    <div className="mx-auto max-w-2xl">
+      <PageHeader
+        title="Configurar extração"
+        description="Informe a disciplina e envie os arquivos .docx. A IA identifica as questões, alternativas, imagens e fórmulas."
+      />
+      <Card>
+        <CardContent className="pt-6">
+          <ExtractionForm />
+        </CardContent>
+      </Card>
     </div>
   );
 }

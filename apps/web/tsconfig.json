@@ -3,6 +3,9 @@
   "compilerOptions": {
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
+    // Vite faz o bundle; aqui o tsc roda só como checagem de tipos
+    // (sem isso, `tsc -b` do script de build espalha .js ao lado dos .tsx).
+    "noEmit": true,
     "paths": { "@/*": ["./src/*"] }
   },
   "include": ["src"]

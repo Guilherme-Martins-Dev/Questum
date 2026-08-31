@@ -15,9 +15,16 @@ export async function exportRoutes(app: FastifyInstance) {
 
     const nomeArquivo = `${resultado.nomeDisciplina.replace(/[^\w\-]+/g, "_")}.xml`;
 
-    return reply
+    reply
       .header("Content-Type", "application/xml; charset=utf-8")
-      .header("Content-Disposition", `attachment; filename="${nomeArquivo}"`)
-      .send(resultado.xml);
+      .header("Content-Disposition", `attachment; filename="${nomeArquivo}"`);
+
+    // Avisos não-fatais (questão sem resposta correta, etc.) vão num header —
+    // o corpo é o arquivo. URI-encoded porque header não aceita acento cru.
+    if (resultado.avisos.length > 0) {
+      reply.header("X-Export-Avisos", encodeURIComponent(JSON.stringify(resultado.avisos)));
+    }
+
+    return reply.send(resultado.xml);
   });
 }

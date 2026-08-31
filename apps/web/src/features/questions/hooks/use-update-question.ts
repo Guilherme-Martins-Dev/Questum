@@ -23,6 +23,7 @@ export function useUpdateQuestion() {
     onSuccess: () => {
       toast.success("Questão atualizada");
       queryClient.invalidateQueries({ queryKey: ["questoes"] });
+      queryClient.invalidateQueries({ queryKey: ["questao"] });
     },
     onError: (erro: Error) => {
       toast.error(erro.message);

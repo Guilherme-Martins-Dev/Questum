@@ -76,6 +76,13 @@ export interface ImagemQuestao {
   dadosBase64: string;
 }
 
+/**
+ * Metadados de uma imagem SEM o binário (dadosBase64). É o que a listagem
+ * de questões devolve — a base64 de todas as imagens de uma disciplina
+ * junta chega a vários MB e a tabela só usa a contagem.
+ */
+export type ImagemQuestaoResumo = Omit<ImagemQuestao, "dadosBase64">;
+
 /** Fórmula já persistida e associada a uma questão (formato do banco). */
 export interface FormulaQuestao {
   id: string;
@@ -84,7 +91,20 @@ export interface FormulaQuestao {
   latex: string;
 }
 
-/** Questão com relações resolvidas — formato devolvido por GET /questoes. */
+/**
+ * Questão como devolvida por GET /questoes (lista) — imagens sem binário.
+ * Para editar (e ver a imagem de verdade) use GET /questoes/:id, que
+ * devolve QuestaoComRelacoes.
+ */
+export interface QuestaoLista extends Questao {
+  unidadeNome: string | null;
+  disciplinaNome: string;
+  alternativas: Alternativa[];
+  imagens: ImagemQuestaoResumo[];
+  formulas: FormulaQuestao[];
+}
+
+/** Questão completa — formato devolvido por GET /questoes/:id, com o binário das imagens. */
 export interface QuestaoComRelacoes extends Questao {
   unidadeNome: string | null;
   disciplinaNome: string;

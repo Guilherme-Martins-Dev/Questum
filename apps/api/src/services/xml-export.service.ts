@@ -165,7 +165,32 @@ function montarQuestaoXml(questao: QuestaoParaExportar): string {
   return partes.join("");
 }
 
-export async function gerarXmlDisciplina(disciplinaId: string): Promise<{ xml: string; nomeDisciplina: string } | null> {
+/** Problemas que quebram (ou degradam) a importação no Moodle. Não bloqueia o export. */
+function validarQuestoes(questoesParaExportar: QuestaoParaExportar[]): string[] {
+  const avisos: string[] = [];
+  for (const q of questoesParaExportar) {
+    const rotulo = q.titulo?.trim() || "(sem título)";
+    if (!q.enunciado?.trim()) {
+      avisos.push(`"${rotulo}": enunciado vazio.`);
+    }
+    if (q.tipo === "Objetiva") {
+      const corretas = q.alternativas.filter((a) => a.correta).length;
+      if (q.alternativas.length < 2) {
+        avisos.push(`"${rotulo}": objetiva com menos de 2 alternativas.`);
+      }
+      if (corretas === 0) {
+        avisos.push(`"${rotulo}": objetiva sem alternativa correta — o Moodle rejeita na importação.`);
+      } else if (corretas > 1) {
+        avisos.push(`"${rotulo}": objetiva com ${corretas} alternativas corretas (esperado 1).`);
+      }
+    }
+  }
+  return avisos;
+}
+
+export async function gerarXmlDisciplina(
+  disciplinaId: string,
+): Promise<{ xml: string; nomeDisciplina: string; avisos: string[] } | null> {
   const [disciplina] = await db.select().from(disciplinas).where(eq(disciplinas.id, disciplinaId));
   if (!disciplina) return null;
 
@@ -232,5 +257,5 @@ export async function gerarXmlDisciplina(disciplinaId: string): Promise<{ xml: s
 
   const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<quiz>${categoria}${corpoQuestoes}</quiz>`;
 
-  return { xml, nomeDisciplina: disciplina.nome };
+  return { xml, nomeDisciplina: disciplina.nome, avisos: validarQuestoes(questoesParaExportar) };
 }

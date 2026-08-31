@@ -4,6 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Questum</title>
+    <script>
+      // Aplica o tema antes da primeira pintura, evitando o flash de tema
+      // errado. Precisa espelhar a lógica de src/app/theme-provider.tsx.
+      (function () {
+        try {
+          var salvo = localStorage.getItem("questum-theme");
+          var escuro =
+            salvo === "dark" ||
+            ((!salvo || salvo === "system") &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          if (escuro) document.documentElement.classList.add("dark");
+          document.documentElement.style.colorScheme = escuro ? "dark" : "light";
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -2,6 +2,7 @@
 node_modules/
 dist/
 build/
+*.tsbuildinfo
 
 # Ambiente / chaves de API
 .env

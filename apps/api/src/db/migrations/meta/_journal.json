@@ -36,6 +36,20 @@
       "when": 1787944802136,
       "tag": "0004_clammy_sauron",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788071144749,
+      "tag": "0005_flashy_sersi",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788129067091,
+      "tag": "0006_white_tyrannus",
+      "breakpoints": true
     }
   ]
 }

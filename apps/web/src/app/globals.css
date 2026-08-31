@@ -2,8 +2,114 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+  Tokens de cor no padrão shadcn/ui: valores HSL "crus" (sem a função hsl())
+  guardados em variáveis CSS e consumidos via hsl(var(--token)) no
+  tailwind.config.ts. Isso permite trocar o tema inteiro — inclusive o
+  Dark Mode — só sobrescrevendo as variáveis dentro de .dark, sem tocar
+  em nenhuma classe de componente.
+
+  Paleta atual: "Academia Tech" (indigo + ciano + violeta para IA).
+*/
 @layer base {
   :root {
+    --background: 210 40% 98%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    /* Indigo Profundo — ações principais */
+    --primary: 243 75% 59%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Ciano Neon Slate — ações secundárias / badges */
+    --secondary: 189 94% 43%;
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+
+    /* Violeta — destaque de IA / extração. Tom escurecido o suficiente pra
+       servir de texto sobre fundo claro (badge tint) com contraste AA. */
+    --accent: 262 72% 51%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Tokens semânticos de status (badges de dificuldade, avisos) */
+    --success: 142 72% 40%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 222 47% 11%;
+
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 243 75% 59%;
+
     --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 222 47% 11%;
+    --foreground: 210 40% 98%;
+
+    --card: 222 45% 14%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222 45% 14%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 243 75% 63%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 189 94% 43%;
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 263 85% 72%;
+    --accent-foreground: 222 47% 11%;
+
+    --destructive: 0 63% 50%;
+    --destructive-foreground: 210 40% 98%;
+
+    --success: 142 60% 45%;
+    --success-foreground: 210 40% 98%;
+    --warning: 38 92% 55%;
+    --warning-foreground: 222 47% 11%;
+
+    --border: 217 33% 22%;
+    --input: 217 33% 22%;
+    --ring: 243 75% 63%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  /* Respeita quem pediu menos movimento no SO: neutraliza pulses de
+     skeleton, spinners e transições. A informação continua nos rótulos
+     ("Carregando…"), então nada de essencial se perde. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
