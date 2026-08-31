@@ -72,8 +72,25 @@ export function verificarAmbientePipeline(log: LoggerLike): void {
 export async function executarExtracao(
   disciplina: string,
   caminhosArquivos: string[],
+  /** Chamado a cada arquivo que o pipeline TERMINA de ler (`lidos` de `total`). */
+  onProgresso?: (lidos: number, total: number) => void,
 ): Promise<ResultadoExtracao> {
+  const totalArquivos = caminhosArquivos.length;
+
   return new Promise((resolve, reject) => {
+    // Progresso: o extrair_json.py loga "[i/N]" ao COMEÇAR o arquivo i (logo
+    // i-1 terminaram) e o pipeline do Gemini loga "… extraída(s) de X.docx"
+    // ao TERMINAR cada arquivo — inclusive o último. Combinando os dois, a
+    // contagem sobe de 0 a N e só cresce.
+    let lidos = 0;
+    const reportar = (n: number) => {
+      const novo = Math.min(Math.max(lidos, n), totalArquivos);
+      if (novo !== lidos) {
+        lidos = novo;
+        onProgresso?.(lidos, totalArquivos);
+      }
+    };
+
     const processo = spawn(PYTHON_BIN, [SCRIPT_PATH, disciplina, ...caminhosArquivos], {
       env: {
         ...process.env,
@@ -128,6 +145,10 @@ export async function executarExtracao(
       // API enquanto a extração roda (pode levar alguns segundos por
       // arquivo, já que cada um é uma chamada à API do Gemini).
       console.log(`[pipeline] ${linha.trim()}`);
+      // "[i/N] arquivo.docx" — começou o arquivo i, logo i-1 já terminaram.
+      for (const m of linha.matchAll(/\[(\d+)\/\d+\]/g)) reportar(Number(m[1]) - 1);
+      // "… questão(ões) extraída(s) de arquivo.docx." — um arquivo terminou.
+      for (const _ of linha.matchAll(/extra[íi]da\(s\) de /gi)) reportar(lidos + 1);
     });
 
     processo.on("error", (erro) => {

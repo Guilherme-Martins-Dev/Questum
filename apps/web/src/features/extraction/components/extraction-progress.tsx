@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -11,12 +11,6 @@ interface ExtractionProgressProps {
   extracaoId: string;
   /** Chamado quando o professor quer voltar ao formulário (erro ou cancelar). */
   onReset: () => void;
-}
-
-function formatarDuracao(segundos: number): string {
-  const m = Math.floor(segundos / 60);
-  const s = segundos % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 type Variante = "processando" | "sucesso" | "erro";
@@ -32,13 +26,6 @@ export function ExtractionProgress({ extracaoId, onReset }: ExtractionProgressPr
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const jaFinalizou = useRef(false);
-
-  const [decorrido, setDecorrido] = useState(0);
-  useEffect(() => {
-    const inicio = Date.now();
-    const timer = setInterval(() => setDecorrido(Math.floor((Date.now() - inicio) / 1000)), 1000);
-    return () => clearInterval(timer);
-  }, []);
 
   const status = job.data?.status;
 
@@ -109,25 +96,67 @@ export function ExtractionProgress({ extracaoId, onReset }: ExtractionProgressPr
     );
   }
 
-  const totalArquivos = job.data?.totalArquivos;
+  const total = job.data?.totalArquivos ?? 0;
+  const lidos = Math.min(job.data?.arquivosProcessados ?? 0, total);
+  const varios = total > 1;
+  const segmentado = varios && total <= 12;
+  const pct = total > 0 ? (lidos / total) * 100 : 0;
+
+  const finalizando = varios && lidos >= total;
+
   return (
     <Estado
       variante="processando"
       icone={<Loader2 className="h-6 w-6 animate-spin" />}
       titulo="Extraindo questões com IA…"
-      descricao={
-        totalArquivos
-          ? `Processando ${totalArquivos} ${totalArquivos > 1 ? "arquivos" : "arquivo"}. Pode levar alguns minutos — não feche esta aba.`
-          : "Preparando o processamento…"
-      }
+      descricao="A IA lê cada arquivo por vez. Pode levar alguns minutos — não feche esta aba."
     >
-      <div className="mt-4 space-y-2">
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-primary/15">
-          <div className="barra-indeterminada h-full w-1/2 rounded-full bg-primary" />
-        </div>
-        <p className="text-center font-mono text-xs text-muted-foreground">
-          {formatarDuracao(decorrido)}
-        </p>
+      <div className="mt-5 space-y-2.5">
+        {segmentado ? (
+          <div
+            className={cn("flex gap-1", finalizando && "animate-pulse")}
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={total}
+            aria-valuenow={lidos}
+          >
+            {Array.from({ length: total }).map((_, i) => (
+              <span
+                key={i}
+                className={cn(
+                  "h-2 flex-1 rounded-full transition-colors duration-500",
+                  i < lidos
+                    ? "bg-primary"
+                    : i === lidos
+                      ? "animate-pulse bg-primary/50"
+                      : "bg-border",
+                )}
+              />
+            ))}
+          </div>
+        ) : varios ? (
+          <div className="h-2 w-full overflow-hidden rounded-full bg-border">
+            <div
+              className={cn(
+                "h-full rounded-full bg-primary transition-[width] duration-500",
+                finalizando && "animate-pulse",
+              )}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        ) : (
+          <div className="relative h-2 w-full overflow-hidden rounded-full bg-border">
+            <div className="barra-indeterminada absolute inset-y-0 w-1/3 rounded-full bg-primary/60" />
+          </div>
+        )}
+
+        {varios && (
+          <p className="text-center text-xs text-muted-foreground">
+            {finalizando
+              ? "Todos os arquivos lidos — organizando as questões…"
+              : `Lendo o arquivo ${lidos + 1} de ${total}`}
+          </p>
+        )}
       </div>
     </Estado>
   );

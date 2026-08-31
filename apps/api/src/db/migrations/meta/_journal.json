@@ -50,6 +50,13 @@
       "when": 1788129067091,
       "tag": "0006_white_tyrannus",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788147481807,
+      "tag": "0007_youthful_avengers",
+      "breakpoints": true
     }
   ]
 }

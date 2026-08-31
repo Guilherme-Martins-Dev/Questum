@@ -66,10 +66,17 @@ export async function processarExtracao(
   try {
     await db
       .update(extracoes)
-      .set({ status: "processando" })
+      .set({ status: "processando", arquivosProcessados: 0 })
       .where(eq(extracoes.id, extracaoId));
 
-    const resultado = await executarExtracao(disciplina, caminhosArquivos);
+    // Progresso arquivo a arquivo. Fire-and-forget: o polling do frontend
+    // lê `arquivosProcessados` do banco.
+    const resultado = await executarExtracao(disciplina, caminhosArquivos, (lidos) => {
+      db.update(extracoes)
+        .set({ arquivosProcessados: lidos })
+        .where(eq(extracoes.id, extracaoId))
+        .catch((e) => log.error(e, "Falha ao atualizar progresso da extração"));
+    });
     const nomesEnviados = caminhosArquivos.map((p) => path.basename(p));
 
     const { disciplinaId, questoesInseridas, ignorados } = await db.transaction(async (tx) => {
@@ -233,6 +240,7 @@ export async function processarExtracao(
       .set({
         status: "concluido",
         disciplinaId,
+        arquivosProcessados: caminhosArquivos.length,
         questoesExtraidas: questoesInseridas,
         imagensExtraidas: Object.keys(resultado.imagens).length,
         formulasExtraidas: Object.keys(resultado.formulas).length,

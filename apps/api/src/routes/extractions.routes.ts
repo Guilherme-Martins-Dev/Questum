@@ -89,6 +89,7 @@ export async function extractionsRoutes(app: FastifyInstance) {
       disciplinaNome: registro.disciplinaNome,
       totalArquivos: registro.totalArquivos,
       disciplinaId: registro.disciplinaId,
+      arquivosProcessados: registro.arquivosProcessados,
       questoesExtraidas: registro.questoesExtraidas,
       imagensExtraidas: registro.imagensExtraidas,
       formulasExtraidas: registro.formulasExtraidas,

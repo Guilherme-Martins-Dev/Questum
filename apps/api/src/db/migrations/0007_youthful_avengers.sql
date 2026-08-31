@@ -1,0 +1,1 @@
+ALTER TABLE "extracoes" ADD COLUMN "arquivos_processados" integer;

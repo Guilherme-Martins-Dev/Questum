@@ -16,6 +16,8 @@ export interface ExtracaoJob {
   totalArquivos: number;
   /** Preenchido quando status === "concluido" — pra onde o frontend navega. */
   disciplinaId: string | null;
+  /** Quantos dos `totalArquivos` o pipeline já leu (progresso durante "processando"). */
+  arquivosProcessados: number | null;
   questoesExtraidas: number | null;
   imagensExtraidas: number | null;
   formulasExtraidas: number | null;

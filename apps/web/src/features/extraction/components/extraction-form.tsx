@@ -1,17 +1,17 @@
 import { useCallback, useRef, useState } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useDropzone } from "react-dropzone";
 import { z } from "zod";
 import { FileText, FileUp, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useDisciplinas } from "@/features/questions/hooks/use-disciplinas";
 import { useExtractQuestions } from "../hooks/use-extract-questions";
+import { DisciplinaCombobox } from "./disciplina-combobox";
 import { ExtractionProgress } from "./extraction-progress";
 
 const PADRAO_UNIDADE_NO_NOME = /\bUNI(?:DADE)?[\s_.-]*0*([0-9]+)/i;
@@ -45,7 +45,7 @@ export function ExtractionForm() {
   const enviandoRef = useRef(false);
 
   const {
-    register,
+    control,
     handleSubmit,
     formState: { errors },
   } = useForm<FormValues>({
@@ -101,27 +101,20 @@ export function ExtractionForm() {
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
       <div className="space-y-1.5">
         <Label htmlFor="disciplina">Disciplina</Label>
-        <Input
-          id="disciplina"
-          list="disciplinas-existentes"
-          placeholder="Ex.: Banco de Dados"
-          disabled={desabilitado}
-          autoComplete="off"
-          {...register("disciplina")}
+        <Controller
+          control={control}
+          name="disciplina"
+          render={({ field }) => (
+            <DisciplinaCombobox
+              id="disciplina"
+              value={field.value}
+              onChange={field.onChange}
+              disciplinas={(disciplinas.data ?? []).map((d) => d.nome)}
+              disabled={desabilitado}
+              error={errors.disciplina?.message}
+            />
+          )}
         />
-        <datalist id="disciplinas-existentes">
-          {(disciplinas.data ?? []).map((d) => (
-            <option key={d.id} value={d.nome} />
-          ))}
-        </datalist>
-        {errors.disciplina ? (
-          <p className="text-xs text-destructive">{errors.disciplina.message}</p>
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            Digite um nome novo ou escolha uma disciplina já processada para adicionar mais questões
-            a ela.
-          </p>
-        )}
       </div>
 
       <div className="space-y-1.5">

@@ -63,6 +63,8 @@ export const extracoes = pgTable(
     disciplinaNome: text("disciplina_nome").notNull(),
     totalArquivos: integer("total_arquivos").notNull(),
     disciplinaId: uuid("disciplina_id").references(() => disciplinas.id, { onDelete: "set null" }),
+    /** Quantos dos `totalArquivos` o pipeline já terminou de ler (progresso). */
+    arquivosProcessados: integer("arquivos_processados"),
     questoesExtraidas: integer("questoes_extraidas"),
     imagensExtraidas: integer("imagens_extraidas"),
     formulasExtraidas: integer("formulas_extraidas"),
