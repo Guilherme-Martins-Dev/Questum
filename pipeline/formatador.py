@@ -19,27 +19,32 @@ from pathlib import Path
 from xml.dom import minidom
 
 
-def _imagem_por_marcador(marcador: str, imagens_extraidas: dict) -> dict | None:
-    for imagem in imagens_extraidas.values():
-        if imagem["marcador"] == marcador:
-            return imagem
+def _por_marcador(marcador: str, registro: dict) -> dict | None:
+    for item in registro.values():
+        if item["marcador"] == marcador:
+            return item
     return None
 
 
-def _texto_html_com_imagens(texto: str, imagens_extraidas: dict) -> tuple[str, list[dict]]:
+def _texto_html(
+    texto: str, imagens_extraidas: dict, formulas_extraidas: dict | None = None
+) -> tuple[str, list[dict]]:
     """
-    Troca cada marcador __MOODLE_IMAGE_...__ por uma tag <img> apontando
-    para @@PLUGINFILE@@ (convenção do Moodle para arquivo embutido) e
-    devolve também a lista de imagens usadas nesse texto, pra anexar como
-    <file> depois.
+    Troca os marcadores por conteúdo de verdade e devolve o HTML + a lista
+    de imagens usadas (pra anexar como <file> depois):
+      __MOODLE_IMAGE_...__   -> <img src="@@PLUGINFILE@@/...">
+      __MOODLE_FORMULA_...__ -> \\(LaTeX\\) (delimitador inline do MathJax
+                                do Moodle; não gera <file>)
     """
     if not texto:
         return "", []
 
+    formulas_extraidas = formulas_extraidas or {}
     usadas = []
     resultado = texto
+
     for marcador in re.findall(r"__MOODLE_IMAGE_[A-F0-9]+__", texto):
-        imagem = _imagem_por_marcador(marcador, imagens_extraidas)
+        imagem = _por_marcador(marcador, imagens_extraidas)
         if imagem is None:
             continue
         usadas.append(imagem)
@@ -48,6 +53,13 @@ def _texto_html_com_imagens(texto: str, imagens_extraidas: dict) -> tuple[str, l
             f'alt="Imagem da questão" style="max-width:100%;height:auto;"></p>'
         )
         resultado = resultado.replace(marcador, tag)
+
+    for marcador in re.findall(r"__MOODLE_FORMULA_[A-F0-9]+__", texto):
+        formula = _por_marcador(marcador, formulas_extraidas)
+        if formula is None:
+            continue
+        resultado = resultado.replace(marcador, f'\\({formula["latex"]}\\)')
+
     return resultado.replace("\n", "<br>"), usadas
 
 
@@ -68,21 +80,23 @@ def _anexar_arquivos(pai, imagens_usadas: list[dict]):
         arquivo.text = imagem["base64"]
 
 
-def montar_elemento_xml(questao: dict, imagens_extraidas: dict) -> ET.Element:
+def montar_elemento_xml(
+    questao: dict, imagens_extraidas: dict, formulas_extraidas: dict | None = None
+) -> ET.Element:
     """Monta o elemento <question> completo (com imagens embutidas) para uma questão."""
     tipo_moodle = "essay" if questao.get("tipo") == "Discursiva" else "multichoice"
     q = ET.Element("question", {"type": tipo_moodle})
 
     _adicionar_texto(q, "name", questao["titulo"], formato_html=False)
 
-    enunciado_html, imagens_enunciado = _texto_html_com_imagens(
-        questao.get("enunciado", ""), imagens_extraidas
+    enunciado_html, imagens_enunciado = _texto_html(
+        questao.get("enunciado", ""), imagens_extraidas, formulas_extraidas
     )
     questiontext = _adicionar_texto(q, "questiontext", enunciado_html)
     _anexar_arquivos(questiontext, imagens_enunciado)
 
-    justificativa_html, imagens_justificativa = _texto_html_com_imagens(
-        questao.get("justificativa", ""), imagens_extraidas
+    justificativa_html, imagens_justificativa = _texto_html(
+        questao.get("justificativa", ""), imagens_extraidas, formulas_extraidas
     )
     feedback = _adicionar_texto(q, "generalfeedback", justificativa_html)
     _anexar_arquivos(feedback, imagens_justificativa)
@@ -114,15 +128,15 @@ def montar_elemento_xml(questao: dict, imagens_extraidas: dict) -> ET.Element:
     # -100 entre as incorretas, que subtrairia pontos por errar.
     fracao_incorreta = "0"
 
-    correta_html, imagens_correta = _texto_html_com_imagens(
-        questao.get("correta", ""), imagens_extraidas
+    correta_html, imagens_correta = _texto_html(
+        questao.get("correta", ""), imagens_extraidas, formulas_extraidas
     )
     resposta_correta = ET.SubElement(q, "answer", {"fraction": fracao_correta, "format": "html"})
     ET.SubElement(resposta_correta, "text").text = correta_html
     _anexar_arquivos(resposta_correta, imagens_correta)
 
     for alternativa in questao.get("incorretas", []):
-        alt_html, imagens_alt = _texto_html_com_imagens(alternativa, imagens_extraidas)
+        alt_html, imagens_alt = _texto_html(alternativa, imagens_extraidas, formulas_extraidas)
         resposta = ET.SubElement(q, "answer", {"fraction": fracao_incorreta, "format": "html"})
         ET.SubElement(resposta, "text").text = alt_html
         _anexar_arquivos(resposta, imagens_alt)
@@ -136,6 +150,7 @@ def gerar_arquivo(
     pasta_saida: str = ".",
     disciplina: str = "Banco de Questões",
     nome_arquivo: str = "banco_questoes.xml",
+    formulas_extraidas: dict | None = None,
 ) -> None:
     """Escreve UM arquivo XML só, com todas as questões do lote."""
     pasta = Path(pasta_saida)
@@ -151,7 +166,7 @@ def gerar_arquivo(
     ET.SubElement(cat, "text").text = f"$course$/top/{disciplina}"
 
     for questao in questoes:
-        quiz.append(montar_elemento_xml(questao, imagens_extraidas))
+        quiz.append(montar_elemento_xml(questao, imagens_extraidas, formulas_extraidas))
 
     xml_bonito = minidom.parseString(ET.tostring(quiz, encoding="utf-8")).toprettyxml(indent="  ")
     caminho = pasta / nome_arquivo

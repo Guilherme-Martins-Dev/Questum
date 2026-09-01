@@ -25,6 +25,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 
 from extracao_ia_gemini import (
+    FORMULAS_EXTRAIDAS,
     IMAGENS_EXTRAIDAS,
     processar_arquivo,
 )
@@ -53,6 +54,7 @@ def main():
         todas_questoes.extend(processar_arquivo(caminho, disciplina=args.disciplina))
 
     print(f"\n[INFO] {len(IMAGENS_EXTRAIDAS)} imagem(ns) encontrada(s) no total.")
+    print(f"[INFO] {len(FORMULAS_EXTRAIDAS)} fórmula(s) encontrada(s) no total.")
     print(f"[INFO] {len(todas_questoes)} questão(ões) no total, de {len(caminhos)} arquivo(s).")
 
     print("Gerando arquivo XML...")
@@ -62,6 +64,7 @@ def main():
         pasta_saida=args.saida,
         disciplina=args.disciplina,
         nome_arquivo=args.nome_arquivo,
+        formulas_extraidas=FORMULAS_EXTRAIDAS,
     )
 
 
