@@ -14,7 +14,7 @@ Em comparação direta entre a extração heurística e a extração via IA (Gem
 - **Explosão de regras** — a única forma de cobrir um novo padrão era adicionar mais um parser específico, o que foi fazendo o código crescer continuamente em linhas e em complexidade.
 - **Dificuldade crescente de manutenção/otimização** — com dezenas de parsers coexistindo, alterar ou otimizar um trecho corria o risco de quebrar outros casos já cobertos, tornando cada mudança mais arriscada e demorada.
 
-A extração via IA (ver `extracao_ia_gemini.py`, `formatador.py` e `main.py` na branch `developer`) substituiu essa lógica por um único fluxo por documento, que generaliza para padrões novos sem precisar de um parser dedicado a cada um.
+A extração via IA (ver `../extracao_ia_gemini.py`, `../formatador.py` e `../main.py`) substituiu essa lógica por um único fluxo por documento, que generaliza para padrões novos sem precisar de um parser dedicado a cada um.
 
 ## Quando ainda vale olhar para este código
 
