@@ -1,3 +1,12 @@
-python-docx
-google-genai
-tenacity
+# Pipeline de extração de questões (.docx -> JSON/JS)
+# Python 3.10+ (usa `from __future__ import annotations` e sintaxe `list[str]`)
+#
+# Instalação:
+#   python -m venv .venv
+#   .venv\Scripts\activate      (Windows)   |   source .venv/bin/activate  (Linux/macOS)
+#   pip install -r requirements.txt
+
+python-docx==1.2.0     # leitura do .docx (docx.Document, oxml, tables, paragraphs)
+lxml==6.1.1            # parsing de XML de SmartArt/diagramas (etree) em extracao_ia_gemini.py
+google-genai==2.17.0   # cliente Gemini (google.genai) para extração via IA
+tenacity==9.1.4        # retry com backoff nas chamadas à API do Gemini
